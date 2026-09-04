@@ -32,25 +32,32 @@
           nativeBuildInputs = [
             pkgs.makeWrapper
             pkgs.pkg-config
+            # Without this the GTK overlay fails at runtime on missing icon
+            # themes and settings schemas, which no unit test would catch.
+            pkgs.wrapGAppsHook4
           ];
-          buildInputs = [ pkgs.alsa-lib ];
+          buildInputs = [
+            pkgs.alsa-lib
+            pkgs.gtk4
+            pkgs.gtk4-layer-shell
+          ];
 
           # Build only the shipped binaries. `freeflow-mock-harness` is a test
           # fixture for the worker pool and has no business in a user profile.
           cargoBuildFlags = [
             "--bin=freeflowd"
             "--bin=freeflow"
+            "--bin=freeflow-overlay"
           ];
 
           # Exercised by the module test and the Rust suite; running them again
           # inside the sandbox would need a compositor and a microphone.
           doCheck = false;
 
-          postInstall = ''
-            for bin in "$out"/bin/*; do
-              wrapProgram "$bin" \
-                --prefix PATH : ${pkgs.lib.makeBinPath runtimeDeps}
-            done
+          # wrapGAppsHook4 wraps the binaries itself, so contribute the
+          # runtime PATH through its hook rather than wrapping twice.
+          preFixup = ''
+            gappsWrapperArgs+=(--prefix PATH : ${pkgs.lib.makeBinPath runtimeDeps})
           '';
 
           meta = {
@@ -72,6 +79,8 @@
             rust-analyzer
             pkg-config
             alsa-lib
+            gtk4
+            gtk4-layer-shell
           ]
           ++ runtimeDeps;
 

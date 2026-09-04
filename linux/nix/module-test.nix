@@ -64,9 +64,10 @@ let
 
   assertions = [
     {
-      name = "both user services are defined";
+      name = "all three user services are defined";
       ok = builtins.attrNames enabled.systemd.user.services == [
         "freeflow"
+        "freeflow-overlay"
         "freeflow-whisper"
       ];
     }
@@ -102,7 +103,10 @@ let
     }
     {
       name = "whisper can be disabled independently of the daemon";
-      ok = builtins.attrNames noWhisper.systemd.user.services == [ "freeflow" ];
+      ok = builtins.attrNames noWhisper.systemd.user.services == [
+        "freeflow"
+        "freeflow-overlay"
+      ];
     }
     {
       name = "nothing is configured when the module is disabled";

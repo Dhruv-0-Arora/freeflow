@@ -92,6 +92,15 @@ in
       };
     };
 
+    overlay.enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Run the layer-shell recording indicator. It is a separate process from
+        the daemon so the daemon carries no GUI dependencies.
+      '';
+    };
+
     hyprland.enable = mkOption {
       type = types.bool;
       default = true;
@@ -153,6 +162,20 @@ in
         Restart = "on-failure";
         RestartSec = 2;
         Environment = [ "FREEFLOW_LOG=freeflow=info,warn" ];
+      };
+      Install.WantedBy = [ "graphical-session.target" ];
+    };
+
+    systemd.user.services.freeflow-overlay = mkIf cfg.overlay.enable {
+      Unit = {
+        Description = "FreeFlow recording overlay";
+        PartOf = [ "graphical-session.target" ];
+        After = [ "graphical-session.target" ];
+      };
+      Service = {
+        ExecStart = "${cfg.package}/bin/freeflow-overlay";
+        Restart = "on-failure";
+        RestartSec = 2;
       };
       Install.WantedBy = [ "graphical-session.target" ];
     };

@@ -7,7 +7,12 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "freeflow-gui"
+name = "freeflow-overlay"
 path = "src/main.rs"
 
 [dependencies]
+freeflow-config.workspace = true
+freeflow-core.workspace = true
+gtk4 = { version = "0.11", features = ["v4_12"] }
+gtk4-layer-shell = "0.8"
+serde_json.workspace = true
