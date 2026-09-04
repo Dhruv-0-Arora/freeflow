@@ -155,7 +155,12 @@ pub struct CliHarnessConfig {
     /// bootstrap at the cost of cross-dictation context.
     pub recycle_after: u32,
     pub request_timeout_ms: u64,
-    /// How long to wait for a warm worker before giving up and falling back.
+    /// How long to wait for a worker that is already bootstrapping before
+    /// giving up and starting a cold one inline.
+    ///
+    /// Should exceed the harness's bootstrap time. Waiting for a warm worker
+    /// that then answers in ~1.2s beats a cold spawn that pays bootstrap
+    /// (~2-3s) *and* the answer, so this is deliberately generous.
     pub pool_wait_timeout_ms: u64,
 }
 
@@ -172,13 +177,18 @@ impl Default for CliHarnessConfig {
                 "--verbose".into(),
                 "--allowed-tools".into(),
                 String::new(),
+                // Without these the harness loads the user's MCP servers into
+                // every dictation, which is slow and irrelevant to cleanup.
+                "--strict-mcp-config".into(),
+                "--mcp-config".into(),
+                r#"{"mcpServers":{}}"#.into(),
             ],
             protocol: HarnessProtocol::ClaudeStreamJson,
             pool_size: 1,
             prime_on_spawn: true,
             recycle_after: 1,
             request_timeout_ms: 15_000,
-            pool_wait_timeout_ms: 1_500,
+            pool_wait_timeout_ms: 5_000,
         }
     }
 }
