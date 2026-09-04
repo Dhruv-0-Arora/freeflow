@@ -11,3 +11,11 @@ name = "freeflow"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
+freeflow-config.workspace = true
+freeflow-core.workspace = true
+freeflow-platform.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+toml.workspace = true

@@ -11,3 +11,13 @@ name = "freeflowd"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
+freeflow-asr.workspace = true
+freeflow-config.workspace = true
+freeflow-core.workspace = true
+freeflow-llm.workspace = true
+freeflow-platform.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

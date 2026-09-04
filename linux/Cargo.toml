@@ -19,13 +19,18 @@ license = "MIT"
 repository = "https://github.com/zachlatta/freeflow"
 
 [workspace.dependencies]
+freeflow-asr = { path = "crates/freeflow-asr" }
 freeflow-config = { path = "crates/freeflow-config" }
 freeflow-core = { path = "crates/freeflow-core" }
+freeflow-llm = { path = "crates/freeflow-llm" }
+freeflow-platform = { path = "crates/freeflow-platform" }
+
+anyhow = "1"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "net", "sync", "time", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "net", "sync", "time", "fs", "signal"] }
 toml = "0.8"
 tracing = "0.1"
 

@@ -10,6 +10,7 @@ pub mod model_config;
 pub mod pipeline;
 pub mod prompt;
 pub mod prompt_text;
+pub mod proto;
 pub mod shortcut;
 pub mod transcript;
 

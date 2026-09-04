@@ -1,4 +1,239 @@
-fn main() {
-    eprintln!("freeflow: not implemented yet");
-    std::process::exit(1);
+//! `freeflow` - the control CLI for `freeflowd`.
+//!
+//! Deliberately thin. Hyprland dispatches a bind by exec'ing a process, so
+//! this runs on every keypress and must start fast and exit fast: it opens the
+//! control socket, writes one line, reads one line, and leaves. All the work
+//! happens in the daemon.
+
+use std::io::Write;
+use std::time::Duration;
+
+use anyhow::{bail, Context};
+use clap::{Parser, Subcommand};
+use freeflow_config::{paths, Config};
+use freeflow_core::proto::{encode, Request, Response};
+use freeflow_core::shortcut::ShortcutEvent;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::UnixStream;
+
+#[derive(Parser)]
+#[command(name = "freeflow", about = "Control the FreeFlow dictation daemon")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Push-to-talk edge. Bind `press` to `bind` and `release` to `bindri`.
+    Hold {
+        #[arg(value_enum)]
+        edge: Edge,
+    },
+    /// Tap to start, tap again to stop.
+    Toggle {
+        #[arg(value_enum, default_value = "press")]
+        edge: Edge,
+    },
+    /// Convert an in-progress hold into a toggle, so it survives key release.
+    Latch,
+    /// Re-inject the last result into the currently focused window.
+    CopyAgain,
+    /// Abandon the current dictation without injecting.
+    Cancel,
+    /// Print what the daemon is doing.
+    Status,
+    /// Check the environment: microphone, wtype, compositor, backends.
+    Doctor,
+    /// List capture devices, for `audio.device` in the config.
+    Devices,
+    /// Print a fully-populated config file.
+    DefaultConfig,
+    /// Print the Hyprland bindings to add to hyprland.conf.
+    Binds,
+    /// Run the pipeline against a WAV file and report per-stage latency.
+    Bench {
+        wav: String,
+        /// Also type the result into the focused window.
+        #[arg(long)]
+        inject: bool,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum Edge {
+    Press,
+    Release,
+}
+
+async fn send(request: Request) -> anyhow::Result<Response> {
+    let socket = paths::control_socket()?;
+    let stream = UnixStream::connect(&socket).await.with_context(|| {
+        format!(
+            "could not reach freeflowd at {}; is the service running? \
+             (systemctl --user status freeflow)",
+            socket.display()
+        )
+    })?;
+
+    let (read_half, mut write_half) = stream.into_split();
+    write_half.write_all(encode(&request).as_bytes()).await?;
+    write_half.flush().await?;
+
+    let mut lines = BufReader::new(read_half).lines();
+    // Bounded so a wedged daemon cannot block the compositor's bind dispatch.
+    let line = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+        .await
+        .context("timed out waiting for freeflowd")??
+        .context("freeflowd closed the connection without replying")?;
+    Ok(serde_json::from_str(&line)?)
+}
+
+/// The bindings to paste into `hyprland.conf`.
+///
+/// `bindri` rather than `bindr` is essential. Hyprland filters binds against
+/// the current modifier mask on release as well as press, so with a plain
+/// `bindr` the release never fires if the user lifts SUPER before D - and
+/// recording would continue forever. The `i` flag ignores modifiers.
+const HYPRLAND_BINDS: &str = r#"# FreeFlow dictation
+# Hold SUPER+ALT+D to talk; release to transcribe.
+bind   = SUPER_ALT, D, exec, freeflow hold press
+bindri = SUPER_ALT, D, exec, freeflow hold release
+
+# Tap to start, tap again to stop.
+bind   = SUPER_ALT, T, exec, freeflow toggle press
+bindri = SUPER_ALT, T, exec, freeflow toggle release
+
+# Latch an in-progress hold so it keeps recording after you let go.
+bind   = SUPER_ALT_SHIFT, D, exec, freeflow latch
+
+# Re-paste the last result, and abandon a dictation.
+bind   = SUPER_ALT, C, exec, freeflow copy-again
+bind   = SUPER_ALT, Escape, exec, freeflow cancel
+"#;
+
+fn print_status(response: &Response) {
+    let mut line = format!("{:?}", response.state);
+    if let Some(message) = &response.message {
+        line = message.clone();
+    }
+    if let Some(level) = response.level {
+        let bars = (level * 20.0).round() as usize;
+        line.push_str(&format!(
+            "  [{}{}] {:.2}",
+            "#".repeat(bars.min(20)),
+            "-".repeat(20 - bars.min(20)),
+            level
+        ));
+    }
+    println!("{line}");
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    // Local commands that do not need the daemon, so they still work when it
+    // is not running - which is exactly when you need them.
+    match &cli.command {
+        Command::Devices => {
+            for device in freeflow_platform::audio::list_input_devices()? {
+                println!(
+                    "{} {:<28} {}",
+                    if device.is_default { "*" } else { " " },
+                    device.id,
+                    device.description
+                );
+            }
+            println!("\n* is the default. Set audio.device in the config to override.");
+            return Ok(());
+        }
+        Command::DefaultConfig => {
+            print!("{}", toml::to_string_pretty(&Config::default())?);
+            return Ok(());
+        }
+        Command::Binds => {
+            print!("{HYPRLAND_BINDS}");
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    let request = match cli.command {
+        Command::Hold { edge } => Request::Shortcut {
+            event: match edge {
+                Edge::Press => ShortcutEvent::HoldActivated,
+                Edge::Release => ShortcutEvent::HoldDeactivated,
+            },
+        },
+        Command::Toggle { edge } => Request::Shortcut {
+            event: match edge {
+                Edge::Press => ShortcutEvent::ToggleActivated,
+                Edge::Release => ShortcutEvent::ToggleDeactivated,
+            },
+        },
+        // Latching reuses the toggle edge: the session machine treats a toggle
+        // arriving during a hold as "switch to toggle mode".
+        Command::Latch => Request::Shortcut {
+            event: ShortcutEvent::ToggleActivated,
+        },
+        Command::CopyAgain => Request::CopyAgain,
+        Command::Cancel => Request::Cancel,
+        Command::Status => Request::Status,
+        Command::Bench { wav, inject } => Request::Bench {
+            wav_path: std::fs::canonicalize(&wav)
+                .with_context(|| format!("{wav}: not found"))?
+                .to_string_lossy()
+                .into_owned(),
+            inject,
+        },
+        Command::Doctor => Request::Doctor,
+        Command::Devices | Command::DefaultConfig | Command::Binds => unreachable!(),
+    };
+
+    let is_doctor = matches!(request, Request::Doctor);
+    let is_status = matches!(request, Request::Status);
+    let is_bench = matches!(request, Request::Bench { .. });
+    let response = send(request).await?;
+
+    if is_doctor {
+        for check in &response.checks {
+            println!(
+                "{} {:<14} {}",
+                if check.ok { "ok  " } else { "FAIL" },
+                check.name,
+                check.detail
+            );
+        }
+        std::io::stdout().flush()?;
+        if !response.ok {
+            bail!("some checks failed");
+        }
+        return Ok(());
+    }
+
+    if is_status {
+        print_status(&response);
+        return Ok(());
+    }
+
+    if is_bench {
+        if !response.ok {
+            bail!(response.message.unwrap_or_else(|| "bench failed".into()));
+        }
+        if let Some(t) = response.timings {
+            let total = t.transcription_ms + t.cleanup_ms + t.injection_ms;
+            println!(
+                "transcription {:>5}ms   cleanup {:>5}ms   injection {:>5}ms   total {:>5}ms",
+                t.transcription_ms, t.cleanup_ms, t.injection_ms, total
+            );
+        }
+        println!("result: {:?}", response.message.unwrap_or_default());
+        return Ok(());
+    }
+
+    if !response.ok {
+        bail!(response.message.unwrap_or_else(|| "request failed".into()));
+    }
+    Ok(())
 }
