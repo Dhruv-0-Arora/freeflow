@@ -75,8 +75,11 @@ enum HarnessEvent {
     /// Session setup finished. Note this arrives *after* the first turn is
     /// sent, so it cannot be used as a pre-turn readiness signal.
     Ready,
-    /// The provider warned about usage limits.
-    RateLimit,
+    /// A usage-limit status heartbeat. Carries `rate_limit_info.status`,
+    /// which is `"allowed"` on the happy path.
+    RateLimit {
+        status: String,
+    },
     /// A completed reply.
     Final(String),
     Error(String),
@@ -93,10 +96,18 @@ fn decode_line(protocol: HarnessProtocol, line: &str) -> HarnessEvent {
                 return HarnessEvent::Ignore;
             };
             match value.get("type").and_then(|t| t.as_str()) {
-                // Emitted mid-stream when the subscription's usage window is
-                // under pressure. Worth surfacing rather than dropping, since
-                // quota is the harness backend's main operational risk.
-                Some("rate_limit_event") => HarnessEvent::RateLimit,
+                // Emitted on every turn as a status heartbeat, carrying
+                // `rate_limit_info.status`. It is `"allowed"` normally, so
+                // this is only interesting when it is not - quota is the
+                // harness backend's main operational risk, but warning on
+                // every dictation would just train the user to ignore logs.
+                Some("rate_limit_event") => HarnessEvent::RateLimit {
+                    status: value
+                        .pointer("/rate_limit_info/status")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                },
                 Some("system") => HarnessEvent::Ready,
                 Some("result") => {
                     if value
@@ -227,8 +238,12 @@ impl Worker {
             match decode_line(protocol, &line) {
                 HarnessEvent::Final(text) => return Ok(text),
                 HarnessEvent::Error(reason) => return Err(reason),
-                HarnessEvent::RateLimit => {
-                    tracing::warn!("harness reported usage-limit pressure");
+                HarnessEvent::RateLimit { status } => {
+                    if status == "allowed" {
+                        tracing::debug!(%status, "harness usage-limit heartbeat");
+                    } else {
+                        tracing::warn!(%status, "harness is approaching or past its usage limit");
+                    }
                 }
                 _ => continue,
             }
@@ -459,6 +474,22 @@ mod tests {
         assert_eq!(
             decode_line(p, r#"{"type":"assistant","message":{}}"#),
             HarnessEvent::Ignore
+        );
+        // The heartbeat arrives on every turn; its status is what matters.
+        assert_eq!(
+            decode_line(
+                p,
+                r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}"#
+            ),
+            HarnessEvent::RateLimit {
+                status: "allowed".into()
+            }
+        );
+        assert_eq!(
+            decode_line(p, r#"{"type":"rate_limit_event"}"#),
+            HarnessEvent::RateLimit {
+                status: "unknown".into()
+            }
         );
         // Non-JSON chatter must not be mistaken for a failure.
         assert_eq!(decode_line(p, "loading..."), HarnessEvent::Ignore);

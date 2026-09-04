@@ -29,7 +29,22 @@
           src = ./linux;
           cargoLock.lockFile = ./linux/Cargo.lock;
 
-          nativeBuildInputs = [ pkgs.makeWrapper ];
+          nativeBuildInputs = [
+            pkgs.makeWrapper
+            pkgs.pkg-config
+          ];
+          buildInputs = [ pkgs.alsa-lib ];
+
+          # Build only the shipped binaries. `freeflow-mock-harness` is a test
+          # fixture for the worker pool and has no business in a user profile.
+          cargoBuildFlags = [
+            "--bin=freeflowd"
+            "--bin=freeflow"
+          ];
+
+          # Exercised by the module test and the Rust suite; running them again
+          # inside the sandbox would need a compositor and a microphone.
+          doCheck = false;
 
           postInstall = ''
             for bin in "$out"/bin/*; do
@@ -64,6 +79,19 @@
         shellHook = ''
           echo "freeflow linux dev shell - cd linux && cargo check"
         '';
+      };
+
+      checks.${system} = {
+        # Catches a broken Home Manager module here rather than during a
+        # rebuild on someone's machine.
+        home-manager-module = import ./linux/nix/module-test.nix { inherit pkgs self; };
+      };
+
+      # Import into a Home Manager configuration to get the daemon, the local
+      # whisper-server, and the Hyprland bindings wired up together.
+      homeManagerModules = {
+        default = import ./linux/nix/home-manager-module.nix { inherit self; };
+        freeflow = self.homeManagerModules.default;
       };
 
       formatter.${system} = pkgs.nixfmt-rfc-style;
