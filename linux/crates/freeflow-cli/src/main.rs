@@ -189,17 +189,20 @@ async fn main() -> anyhow::Result<()> {
                 Edge::Press => ShortcutEvent::HoldActivated,
                 Edge::Release => ShortcutEvent::HoldDeactivated,
             },
+            key: None,
         },
         Command::Toggle { edge } => Request::Shortcut {
             event: match edge {
                 Edge::Press => ShortcutEvent::ToggleActivated,
                 Edge::Release => ShortcutEvent::ToggleDeactivated,
             },
+            key: None,
         },
         // Latching reuses the toggle edge: the session machine treats a toggle
         // arriving during a hold as "switch to toggle mode".
         Command::Latch => Request::Shortcut {
             event: ShortcutEvent::ToggleActivated,
+            key: None,
         },
         Command::CopyAgain => Request::CopyAgain,
         Command::Cancel => Request::Cancel,

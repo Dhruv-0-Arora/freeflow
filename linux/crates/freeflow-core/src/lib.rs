@@ -6,6 +6,7 @@
 //! `freeflow-asr`.
 
 pub mod cooldown;
+pub mod keymap;
 pub mod model_config;
 pub mod pipeline;
 pub mod prompt;

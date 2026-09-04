@@ -16,9 +16,16 @@ use crate::shortcut::ShortcutEvent;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Request {
-    /// A shortcut edge from a Hyprland `bind` or `bindri`.
+    /// A shortcut edge from a Hyprland `bind`.
     Shortcut {
         event: ShortcutEvent,
+        /// The main key of the bind that fired, as Hyprland spells it
+        /// (`"D"`, `"T"`, `"code:40"`). Lets the daemon watch `/dev/input`
+        /// for the key's release, since a compositor release bind would
+        /// consume the key's press for every modifier state. Optional so
+        /// older clients and manual `socat` use keep working.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
     },
     /// Re-inject the last result, for when a paste landed in the wrong window.
     CopyAgain,
@@ -173,13 +180,33 @@ mod tests {
     fn requests_round_trip_as_tagged_json() {
         let request = Request::Shortcut {
             event: ShortcutEvent::HoldActivated,
+            key: None,
         };
         let line = encode(&request);
         assert!(line.ends_with('\n'));
+        // No `key` on the wire when it is absent, so the encoding is
+        // unchanged for clients that do not send one.
         assert_eq!(line.trim(), r#"{"cmd":"shortcut","event":"holdActivated"}"#);
         assert_eq!(
             serde_json::from_str::<Request>(line.trim()).unwrap(),
             request
+        );
+    }
+
+    // Binds dispatch `--key` so the daemon can watch /dev/input for the
+    // release; a request without one (older client, manual socat) must still
+    // parse.
+    #[test]
+    fn the_shortcut_key_is_optional_on_the_wire() {
+        assert_eq!(
+            serde_json::from_str::<Request>(
+                r#"{"cmd":"shortcut","event":"holdActivated","key":"D"}"#
+            )
+            .unwrap(),
+            Request::Shortcut {
+                event: ShortcutEvent::HoldActivated,
+                key: Some("D".into()),
+            }
         );
     }
 
