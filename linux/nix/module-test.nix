@@ -111,6 +111,7 @@ let
       ok = builtins.all (a: lib.hasInfix "freeflow ${a}" binds) [
         "hold press --key D"
         "toggle press --key T"
+        "edit press --key E"
         "latch --key T"
         "copy-again"
         "cancel"

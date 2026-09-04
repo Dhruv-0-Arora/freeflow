@@ -13,6 +13,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::shortcut::ShortcutEvent;
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Request {
@@ -26,6 +31,13 @@ pub enum Request {
         /// older clients and manual `socat` use keep working.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         key: Option<String>,
+        /// Start this session in edit mode, applying the dictation to the
+        /// PRIMARY selection. Explicit opt-in: on Wayland the selection
+        /// persists from whatever was last highlighted anywhere, so sniffing
+        /// it on every dictation turned stale selections into rewrites of
+        /// the wrong text.
+        #[serde(default, skip_serializing_if = "is_false")]
+        edit: bool,
     },
     /// Re-inject the last result, for when a paste landed in the wrong window.
     CopyAgain,
@@ -181,6 +193,7 @@ mod tests {
         let request = Request::Shortcut {
             event: ShortcutEvent::HoldActivated,
             key: None,
+            edit: false,
         };
         let line = encode(&request);
         assert!(line.ends_with('\n'));
@@ -197,7 +210,7 @@ mod tests {
     // release; a request without one (older client, manual socat) must still
     // parse.
     #[test]
-    fn the_shortcut_key_is_optional_on_the_wire() {
+    fn the_shortcut_key_and_edit_flag_are_optional_on_the_wire() {
         assert_eq!(
             serde_json::from_str::<Request>(
                 r#"{"cmd":"shortcut","event":"holdActivated","key":"D"}"#
@@ -206,6 +219,18 @@ mod tests {
             Request::Shortcut {
                 event: ShortcutEvent::HoldActivated,
                 key: Some("D".into()),
+                edit: false,
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<Request>(
+                r#"{"cmd":"shortcut","event":"holdActivated","key":"E","edit":true}"#
+            )
+            .unwrap(),
+            Request::Shortcut {
+                event: ShortcutEvent::HoldActivated,
+                key: Some("E".into()),
+                edit: true,
             }
         );
     }

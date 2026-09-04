@@ -157,7 +157,7 @@ If every backend fails, the raw transcript is typed anyway. Every branch of the 
 
 ## 6. Things that were wrong, and what caught them
 
-This is the most useful section to review. Nine assumptions failed; seven were caught by testing against the real thing before shipping, and two (6.8, 6.9) shipped and were caught by the user because the one step that would have exposed them ran after all testing ended.
+This is the most useful section to review. Ten assumptions failed; seven were caught by testing against the real thing before shipping, and three (6.8, 6.9, 6.10) shipped and were caught by the user because the one step that would have exposed them ran after all testing ended.
 
 ### 6.1 `bindr` would wedge recording forever — caught by review + live probe, but the fix was worse (see 6.8)
 
@@ -230,6 +230,17 @@ Fixes, each with a test that was verified to fail against the old code:
 - State lives in a `tokio::sync::watch` channel written synchronously; the terminal write is last by construction.
 - `Error` auto-clears to `Idle` after 4s, so a failed dictation no longer pins the overlay forever.
 - The busy state is set *before* the pipeline task is spawned, closing a re-entry race that let a second recording start while the first was processing (the likely source of the HTTP 400 seen in the same minute: a sub-200ms tap producing a header-only WAV, now also guarded).
+
+### 6.10 A stale PRIMARY selection hijacked every dictation into edit mode — shipped, caught by the user
+
+The macOS design infers edit mode from "the user has text selected", which is sound there: the Accessibility API reports the focused element's *live* selection.
+The port kept the inference but swapped the source to Wayland's PRIMARY selection - which persists from whatever was last highlighted in **any** application, indefinitely.
+Result: with the two-character string "di" sitting in PRIMARY, every dictation became "rewrite `di` per this instruction" and typed `di` back, no matter what was said.
+Selecting the junk output to delete it refreshed PRIMARY with the same junk, making the failure self-sustaining.
+The history store's `raw:` line is what made diagnosis instant - raw transcripts were perfect, so capture and transcription were exonerated in one glance.
+
+Fix: edit mode is now an explicit `SUPER_ALT, E` push-to-talk bind that captures the selection at key-down; ordinary dictations never read PRIMARY at all.
+The lesson generalises 6.8: **a mechanism ported across platforms carries its old meaning only if the underlying signal means the same thing** - "selection exists" is intent on macOS and noise on Wayland, just as "release bind" is harmless on macOS-style hotkey APIs and press-consuming on Hyprland.
 
 ### Also corrected
 

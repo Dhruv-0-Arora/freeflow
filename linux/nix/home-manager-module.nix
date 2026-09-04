@@ -54,6 +54,9 @@ let
     # Tap to start, tap again to stop.
     bind = ${cfg.keybinds.toggle}, exec, freeflow toggle press --key ${keyOf cfg.keybinds.toggle}
 
+    # Hold to rewrite the highlighted text with what you say (edit mode).
+    bind = ${cfg.keybinds.edit}, exec, freeflow edit press --key ${keyOf cfg.keybinds.edit}
+
     # Convert an in-progress hold into a toggle that outlives the key release.
     bind = ${cfg.keybinds.latch}, exec, freeflow latch --key ${keyOf cfg.keybinds.toggle}
 
@@ -97,6 +100,16 @@ in
         type = types.str;
         default = "SUPER_ALT_SHIFT, D";
         description = "Convert an in-progress hold into a toggle.";
+      };
+      edit = mkOption {
+        type = types.str;
+        default = "SUPER_ALT, E";
+        description = ''
+          Push-to-talk that rewrites the PRIMARY selection instead of typing
+          new text. A separate binding because on Wayland the selection
+          persists from whatever was last highlighted, so it cannot be used
+          to infer intent on ordinary dictations.
+        '';
       };
       copyAgain = mkOption {
         type = types.str;

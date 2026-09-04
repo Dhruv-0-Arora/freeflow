@@ -50,6 +50,17 @@ enum Command {
         #[arg(long)]
         key: Option<String>,
     },
+    /// Push-to-talk that rewrites the current PRIMARY selection instead of
+    /// typing new text. Edit mode is explicit: on Wayland the selection
+    /// persists from whatever was last highlighted anywhere, so inferring it
+    /// would rewrite stale text.
+    Edit {
+        #[arg(value_enum)]
+        edge: Edge,
+        /// The bind's main key as Hyprland spells it, e.g. `E`.
+        #[arg(long)]
+        key: Option<String>,
+    },
     /// Re-inject the last result into the currently focused window.
     CopyAgain,
     /// Abandon the current dictation without injecting.
@@ -188,6 +199,7 @@ async fn main() -> anyhow::Result<()> {
                 Edge::Release => ShortcutEvent::HoldDeactivated,
             },
             key,
+            edit: false,
         },
         Command::Toggle { edge, key } => Request::Shortcut {
             event: match edge {
@@ -195,12 +207,24 @@ async fn main() -> anyhow::Result<()> {
                 Edge::Release => ShortcutEvent::ToggleDeactivated,
             },
             key,
+            edit: false,
         },
         // Latching reuses the toggle edge: the session machine treats a toggle
         // arriving during a hold as "switch to toggle mode".
         Command::Latch { key } => Request::Shortcut {
             event: ShortcutEvent::ToggleActivated,
             key,
+            edit: false,
+        },
+        // Edit mode is a hold session whose start carries the edit flag; the
+        // daemon reads the selection only for these.
+        Command::Edit { edge, key } => Request::Shortcut {
+            event: match edge {
+                Edge::Press => ShortcutEvent::HoldActivated,
+                Edge::Release => ShortcutEvent::HoldDeactivated,
+            },
+            key,
+            edit: true,
         },
         Command::CopyAgain => Request::CopyAgain,
         Command::Cancel => Request::Cancel,

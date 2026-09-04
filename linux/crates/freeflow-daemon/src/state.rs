@@ -184,13 +184,14 @@ impl Daemon {
         self: &Arc<Self>,
         event: ShortcutEvent,
         key: Option<String>,
+        edit: bool,
     ) -> anyhow::Result<()> {
         let busy = Self::is_busy(self.state());
         let action = self.session.lock().await.handle(event, busy);
 
         match action {
             Some(DictationShortcutAction::Start(mode)) => {
-                self.start_recording(mode).await?;
+                self.start_recording(mode, edit).await?;
                 if let Some(key) = key {
                     let release = match mode {
                         RecordingTriggerMode::Hold => ShortcutEvent::HoldDeactivated,
@@ -234,7 +235,7 @@ impl Daemon {
                 return;
             };
             handle.spawn(async move {
-                if let Err(e) = daemon.handle_shortcut(release, None).await {
+                if let Err(e) = daemon.handle_shortcut(release, None, false).await {
                     tracing::warn!(error = %e, "release edge failed");
                 }
             });
@@ -251,10 +252,17 @@ impl Daemon {
         self.watcher.lock().unwrap().take();
     }
 
-    async fn start_recording(self: &Arc<Self>, mode: RecordingTriggerMode) -> anyhow::Result<()> {
+    async fn start_recording(
+        self: &Arc<Self>,
+        mode: RecordingTriggerMode,
+        edit: bool,
+    ) -> anyhow::Result<()> {
         // Capture context before anything can steal focus or clear the
-        // selection.
-        let session = SessionContext::capture(self.config.dictation.edit_mode_enabled);
+        // selection. The selection is read only when this session was started
+        // by the explicit edit bind: on Wayland PRIMARY persists from
+        // whatever was last highlighted anywhere, and reading it on every
+        // dictation turned stale selections into rewrites of the wrong text.
+        let session = SessionContext::capture(edit && self.config.dictation.edit_mode_enabled);
 
         // Start the backend bootstrapping now. For the CLI harness this is the
         // difference between ~1.2s and ~5.8s: the work happens while the user

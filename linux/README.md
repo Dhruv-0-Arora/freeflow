@@ -23,7 +23,7 @@ Everything below the prompts is new, because none of it could be carried over.
 | Hotkeys | `CGEvent` tap, needs Accessibility permission | Hyprland press binds dispatching to `freeflow`; releases watched on `/dev/input` |
 | Default shortcut | Hold `Fn` | Hold `Super+Alt+D` — `Fn` is handled in keyboard firmware on PCs and never reaches the OS |
 | Typing the result | Clipboard + synthetic Cmd-V + restore | `wtype` types it directly; the clipboard is never touched |
-| Selected text | Accessibility API | The PRIMARY selection, which Wayland populates on highlight |
+| Selected text | Accessibility API | The PRIMARY selection, read only when the explicit edit bind starts the session |
 | Window context | Accessibility API | `hyprctl activewindow -j` |
 | Transcription | Groq Whisper | Local `whisper-server`, or any OpenAI-compatible URL |
 | Cleanup | Groq | A local agent CLI, or any OpenAI-compatible URL |
@@ -85,6 +85,9 @@ bind = SUPER_ALT, D, exec, freeflow hold press --key D
 # Tap to start, tap again to stop.
 bind = SUPER_ALT, T, exec, freeflow toggle press --key T
 
+# Hold to rewrite the highlighted text with what you say (edit mode).
+bind = SUPER_ALT, E, exec, freeflow edit press --key E
+
 # Convert an in-progress hold into a toggle that outlives the key release.
 bind = SUPER_ALT_SHIFT, D, exec, freeflow latch --key T
 
@@ -98,6 +101,10 @@ Hyprland consumes the press of a release-bound key, and the ignore-modifiers fla
 Instead, each session bind passes its main key via `--key`, and the daemon polls `/dev/input` for that key's release only while a session is active - nothing reads input devices outside a dictation, and nothing is ever grabbed.
 This requires the user to be in the `input` group; `freeflow doctor` reports it as the `keywatch` check.
 A flake check asserts no release bind can reappear, and that this file, the module template, and `freeflow binds` all carry identical bind text.
+
+**Edit mode has its own binding and is never inferred.**
+On Wayland the PRIMARY selection persists from whatever was last highlighted in any application, so "a selection exists" carries no information about what the user wants now - inferring edit mode from it rewrote stale selections instead of typing dictations.
+Ordinary dictations never read the selection; only the edit bind captures it, at the moment the key goes down.
 
 ## Configuration
 
