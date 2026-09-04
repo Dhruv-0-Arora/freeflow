@@ -7,10 +7,16 @@
 
 pub mod cooldown;
 pub mod model_config;
+pub mod pipeline;
 pub mod prompt;
 pub mod prompt_text;
 pub mod shortcut;
 pub mod transcript;
+
+pub use pipeline::{
+    parse_transcript_commands, plan, resolve, Decision, Outcome, PipelineInput, SessionIntent,
+    VoiceMacro,
+};
 
 pub use prompt::{
     apply_output_language, build_cleanup_prompt, build_edit_mode_prompt,
