@@ -4,6 +4,11 @@ FreeFlow is a native macOS menu-bar dictation app built directly with `swiftc`
 and Make. It does not use Swift Package Manager or an Xcode project. Preserve
 that architecture unless the user explicitly approves a migration.
 
+`linux/` is a separate Rust reimplementation for Wayland, with its own build,
+tests, and rules. See `linux/README.md`. It does not build on macOS, the
+`Makefile` does not build it, and `make check` does not test it. Changes to the
+Swift app and changes to `linux/` should not share a commit.
+
 ## Repository map
 
 - `Sources/App.swift` and `Sources/AppDelegate.swift`: app lifecycle.
@@ -19,6 +24,10 @@ that architecture unless the user explicitly approves a migration.
 - `Sources/SettingsView.swift`, `Sources/SetupView.swift`, and other SwiftUI
   files: user interface.
 - `Tests/`: dependency-free executable tests.
+- `linux/`: Rust reimplementation for Wayland. Verified with `linux/check.sh`,
+  not `make check`. Its prompt text is extracted mechanically from
+  `Sources/PostProcessingService.swift`; when a prompt changes here, re-extract
+  rather than hand-editing the copy.
 - `.github/workflows/check.yml`: pull-request verification.
 - `.github/workflows/release.yml`: semver-tagged production release.
 - `.github/workflows/dev-release.yml`: signed development release from `main`.
@@ -48,6 +57,15 @@ Run before handing off every code change:
 ```bash
 make check
 git diff --check
+```
+
+For changes under `linux/`, run `linux/check.sh` instead. It covers formatting,
+clippy as errors, the Rust test suite, and the Home Manager module. The suites
+that need real services are ignored by default and must be run deliberately:
+
+```bash
+cargo test -p freeflow-llm --test live_harness -- --ignored
+cargo test -p freeflow-asr --test live_whisper -- --ignored
 ```
 
 `make check` performs a full Swift type-check, compiles and runs deterministic
