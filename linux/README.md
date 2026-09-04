@@ -102,6 +102,10 @@ Instead, each session bind passes its main key via `--key`, and the daemon polls
 This requires the user to be in the `input` group; `freeflow doctor` reports it as the `keywatch` check.
 A flake check asserts no release bind can reappear, and that this file, the module template, and `freeflow binds` all carry identical bind text.
 
+**High function keys must be bound by keycode, not name.**
+F13-F24 are ideal firmware-remap targets (they exist on no physical board), but xkeyboard-config does not give them their own keysyms: KEY_F20 produces `XF86AudioMicMute` and KEY_F21 `XF86TouchpadToggle`, so a Hyprland bind on the name `F20` never fires.
+Bind `code:N` instead, where N is the kernel code plus 8 (KEY_F20 = 190 -> `code:198`); the daemon's `--key` parser accepts the same `code:` form.
+
 **Edit mode has its own binding and is never inferred.**
 On Wayland the PRIMARY selection persists from whatever was last highlighted in any application, so "a selection exists" carries no information about what the user wants now - inferring edit mode from it rewrote stale selections instead of typing dictations.
 Ordinary dictations never read the selection; only the edit bind captures it, at the moment the key goes down.
