@@ -74,7 +74,22 @@ enum Edge {
     Release,
 }
 
+/// How long to wait for a reply.
+///
+/// Shortcut commands are dispatched synchronously by the compositor on every
+/// keypress, so they must never block it for long - the daemon does the work
+/// asynchronously and replies immediately. `bench` is the opposite: it runs
+/// the whole pipeline before answering, and that legitimately takes seconds.
+fn deadline(request: &Request) -> Duration {
+    match request {
+        Request::Bench { .. } => Duration::from_secs(180),
+        Request::Doctor => Duration::from_secs(30),
+        _ => Duration::from_secs(5),
+    }
+}
+
 async fn send(request: Request) -> anyhow::Result<Response> {
+    let deadline = deadline(&request);
     let socket = paths::control_socket()?;
     let stream = UnixStream::connect(&socket).await.with_context(|| {
         format!(
@@ -89,8 +104,9 @@ async fn send(request: Request) -> anyhow::Result<Response> {
     write_half.flush().await?;
 
     let mut lines = BufReader::new(read_half).lines();
-    // Bounded so a wedged daemon cannot block the compositor's bind dispatch.
-    let line = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+    // Always bounded, so a wedged daemon cannot block the compositor's bind
+    // dispatch indefinitely.
+    let line = tokio::time::timeout(deadline, lines.next_line())
         .await
         .context("timed out waiting for freeflowd")??
         .context("freeflowd closed the connection without replying")?;
