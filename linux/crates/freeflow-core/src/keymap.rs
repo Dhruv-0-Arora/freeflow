@@ -87,6 +87,20 @@ pub fn keycode(name: &str) -> Option<u16> {
         "f10" => 68,
         "f11" => 87,
         "f12" => 88,
+        // F13-F24 exist on no physical board, which makes them ideal
+        // firmware-remap targets (e.g. a Wooting layer key sending F20).
+        "f13" => 183,
+        "f14" => 184,
+        "f15" => 185,
+        "f16" => 186,
+        "f17" => 187,
+        "f18" => 188,
+        "f19" => 189,
+        "f20" => 190,
+        "f21" => 191,
+        "f22" => 192,
+        "f23" => 193,
+        "f24" => 194,
         _ => return None,
     };
     Some(code)
@@ -109,6 +123,14 @@ mod tests {
         assert_eq!(keycode("d"), keycode("D"));
         assert_eq!(keycode(" t "), keycode("T"));
         assert_eq!(keycode("RETURN"), keycode("enter"));
+    }
+
+    #[test]
+    fn high_function_keys_resolve_for_firmware_remaps() {
+        assert_eq!(keycode("F20"), Some(190));
+        assert_eq!(keycode("f13"), Some(183));
+        assert_eq!(keycode("F24"), Some(194));
+        assert_eq!(keycode("F25"), None);
     }
 
     #[test]
