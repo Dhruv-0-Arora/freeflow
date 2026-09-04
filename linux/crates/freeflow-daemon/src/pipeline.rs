@@ -197,12 +197,24 @@ pub async fn run(
 
     report(DaemonState::Injecting);
     let started = Instant::now();
-    inject_text(&parsed.transcript, &session, config)?;
-    if parsed.should_press_enter {
-        // Small settle so the target has processed the typed text before the
-        // newline submits it.
-        tokio::time::sleep(Duration::from_millis(60)).await;
-        let _ = inject::press_enter();
+    // Injection shells out to wtype and sleeps between steps; run it on the
+    // blocking pool so it cannot stall the async runtime.
+    {
+        let text = parsed.transcript.clone();
+        let session = session.clone();
+        let config = config.clone();
+        let should_press_enter = parsed.should_press_enter;
+        tokio::task::spawn_blocking(move || {
+            inject_text(&text, &session, &config)?;
+            if should_press_enter {
+                // Small settle so the target has processed the typed text
+                // before the newline submits it.
+                std::thread::sleep(Duration::from_millis(60));
+                let _ = inject::press_enter();
+            }
+            Ok::<(), inject::InjectError>(())
+        })
+        .await??;
     }
     timings.injection = started.elapsed();
 

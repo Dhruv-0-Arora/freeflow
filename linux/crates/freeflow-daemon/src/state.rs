@@ -13,10 +13,14 @@ use freeflow_core::shortcut::{
 };
 use freeflow_llm::{CliHarnessBackend, LlmBackend, OpenAiCompatBackend, RoutingBackend};
 use freeflow_platform::{audio, inject};
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex};
 
 use crate::history::{History, NewEntry};
 use crate::pipeline::{self, SessionContext};
+
+/// How long a terminal `Error` stays visible before the daemon returns to
+/// `Idle` on its own.
+const ERROR_LINGER: Duration = Duration::from_secs(4);
 
 /// Live recording plus the context captured when it started.
 struct ActiveRecording {
@@ -31,7 +35,15 @@ pub struct Daemon {
     macros: Vec<VoiceMacro>,
     session: Mutex<DictationShortcutSessionController>,
     active: Mutex<Option<ActiveRecording>>,
-    state: Mutex<DaemonState>,
+    /// A watch channel rather than a mutex so writes are synchronous: every
+    /// state transition lands in program order, and the terminal Idle/Error
+    /// write is guaranteed to be the last one. A spawned write here once left
+    /// the daemon reporting "Pasting" forever after a successful dictation.
+    state: watch::Sender<DaemonState>,
+    /// How long a terminal `Error` lingers before clearing back to `Idle`.
+    /// The overlay only hides on `Idle`, so an uncleared error would sit on
+    /// screen until the next dictation.
+    error_linger: Duration,
     /// The last injected text, so `copy-again` can re-deliver a result that
     /// landed in the wrong window.
     last_result: Mutex<Option<String>>,
@@ -127,17 +139,18 @@ impl Daemon {
             history: Mutex::new(history),
             session: Mutex::new(DictationShortcutSessionController::new()),
             active: Mutex::new(None),
-            state: Mutex::new(DaemonState::Idle),
+            state: watch::channel(DaemonState::Idle).0,
+            error_linger: ERROR_LINGER,
             last_result: Mutex::new(None),
         })
     }
 
-    pub async fn state(&self) -> DaemonState {
-        *self.state.lock().await
+    pub fn state(&self) -> DaemonState {
+        *self.state.borrow()
     }
 
-    async fn set_state(&self, state: DaemonState) {
-        *self.state.lock().await = state;
+    fn set_state(&self, state: DaemonState) {
+        self.state.send_replace(state);
     }
 
     /// Input level while recording, for the overlay's meter.
@@ -158,7 +171,7 @@ impl Daemon {
 
     /// Feeds one compositor-dispatched shortcut edge into the session machine.
     pub async fn handle_shortcut(self: &Arc<Self>, event: ShortcutEvent) -> anyhow::Result<()> {
-        let busy = Self::is_busy(self.state().await);
+        let busy = Self::is_busy(self.state());
         let action = self.session.lock().await.handle(event, busy);
 
         match action {
@@ -189,7 +202,7 @@ impl Daemon {
 
         tracing::info!(?mode, class = ?session.window.class, "recording");
         *self.active.lock().await = Some(ActiveRecording { recording, session });
-        self.set_state(DaemonState::Recording).await;
+        self.set_state(DaemonState::Recording);
 
         // A missed hotkey release must not leave the microphone open forever.
         let daemon = Arc::clone(self);
@@ -197,7 +210,7 @@ impl Daemon {
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(limit + 1)).await;
             let still_recording = daemon.active.lock().await.is_some();
-            if still_recording && daemon.state().await == DaemonState::Recording {
+            if still_recording && daemon.state() == DaemonState::Recording {
                 tracing::warn!(limit, "recording hit its limit; stopping");
                 daemon.session.lock().await.reset();
                 let _ = daemon.stop_and_process().await;
@@ -213,9 +226,28 @@ impl Daemon {
         let ActiveRecording { recording, session } = active;
         let wav = recording.stop()?;
 
+        // Mark the daemon busy before the pipeline task is even scheduled, so
+        // a hotkey edge arriving in the gap cannot observe a stale state and
+        // start a second recording.
+        self.set_state(DaemonState::Transcribing);
+        self.spawn_pipeline(wav, session, true);
+        Ok(())
+    }
+
+    /// Runs the pipeline off the request path so the CLI's hotkey dispatch
+    /// returns immediately; Hyprland execs it synchronously.
+    ///
+    /// Stage reports go through the synchronous `set_state`, which is what
+    /// guarantees the terminal `Idle`/`Error` is the last write. Reporting via
+    /// a spawned task once let the `Injecting` write land *after* `Idle`,
+    /// leaving the daemon claiming "Pasting" forever and dropping hotkeys.
+    fn spawn_pipeline(
+        self: &Arc<Self>,
+        wav: Vec<u8>,
+        session: SessionContext,
+        should_inject: bool,
+    ) -> tokio::task::JoinHandle<()> {
         let daemon = Arc::clone(self);
-        // Run off the request path so the CLI's `bindri` dispatch returns
-        // immediately; Hyprland execs it synchronously.
         tokio::spawn(async move {
             let result = pipeline::run(
                 wav,
@@ -226,11 +258,8 @@ impl Daemon {
                     llm: &daemon.llm,
                     macros: &daemon.macros,
                 },
-                true,
-                |state| {
-                    let daemon = Arc::clone(&daemon);
-                    tokio::spawn(async move { daemon.set_state(state).await });
-                },
+                should_inject,
+                |state| daemon.set_state(state),
             )
             .await;
 
@@ -248,15 +277,27 @@ impl Daemon {
                         daemon.record_history(&result).await;
                         *daemon.last_result.lock().await = Some(result.text);
                     }
-                    daemon.set_state(DaemonState::Idle).await;
+                    daemon.set_state(DaemonState::Idle);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "dictation failed");
-                    daemon.set_state(DaemonState::Error).await;
+                    daemon.set_state(DaemonState::Error);
+                    daemon.schedule_error_clear();
                 }
             }
+        })
+    }
+
+    /// Returns an errored daemon to `Idle` after a linger, unless something
+    /// else has already moved the state on.
+    fn schedule_error_clear(self: &Arc<Self>) {
+        let daemon = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(daemon.error_linger).await;
+            if daemon.state() == DaemonState::Error {
+                daemon.set_state(DaemonState::Idle);
+            }
         });
-        Ok(())
     }
 
     /// Writes one completed dictation to the local history store.
@@ -316,8 +357,13 @@ impl Daemon {
             return Ok(());
         };
         // No stored window context: the point of this command is to deliver
-        // into wherever the user is focused *now*.
-        pipeline::inject_text(&text, &SessionContext::default(), &self.config)?;
+        // into wherever the user is focused *now*. Injection shells out and
+        // sleeps, so it runs off the async runtime.
+        let config = self.config.clone();
+        tokio::task::spawn_blocking(move || {
+            pipeline::inject_text(&text, &SessionContext::default(), &config)
+        })
+        .await??;
         Ok(())
     }
 
@@ -359,7 +405,7 @@ impl Daemon {
         self.session.lock().await.reset();
         // Dropping the recording stops capture; the audio is discarded.
         self.active.lock().await.take();
-        self.set_state(DaemonState::Idle).await;
+        self.set_state(DaemonState::Idle);
         Ok(())
     }
 
@@ -514,5 +560,100 @@ mod tests {
         let router = build_llm(&config_with(LlmBackendKind::None, None)).unwrap();
         assert_eq!(router.id(), "router[]");
         assert!(!router.health().is_usable());
+    }
+
+    /// One-request HTTP stub standing in for whisper-server.
+    async fn stub_asr(status: u16, body: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            // Drain the whole request first; replying mid-upload can surface
+            // as a transport error in the client instead of the stub status.
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 8192];
+            let content_length = loop {
+                let n = socket.read(&mut chunk).await.unwrap_or(0);
+                if n == 0 {
+                    return;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
+                    let length = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    break end + 4 + length;
+                }
+            };
+            while buf.len() < content_length {
+                let n = socket.read(&mut chunk).await.unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            let head = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = socket.write_all(head.as_bytes()).await;
+            let _ = socket.write_all(body.as_bytes()).await;
+            let _ = socket.flush().await;
+        });
+        format!("http://{addr}")
+    }
+
+    fn test_daemon(base_url: &str) -> Daemon {
+        let mut config = config_with(LlmBackendKind::None, None);
+        config.transcription.base_url = base_url.to_string();
+        config.transcription.api_key_file = None;
+        // Keep the test off the user's real history store.
+        config.dictation.history_enabled = false;
+        Daemon::new(config).unwrap()
+    }
+
+    // Every stage report must land before the terminal state. When reports
+    // went through `tokio::spawn`, a stage write could be scheduled after the
+    // terminal `Idle`, leaving the daemon claiming "Cleaning up" or "Pasting"
+    // forever and silently dropping hotkeys as busy.
+    #[tokio::test]
+    async fn a_completed_pipeline_ends_idle_with_no_late_state_writes() {
+        let base = stub_asr(200, r#"{"text":"hello world"}"#).await;
+        let daemon = Arc::new(test_daemon(&base));
+
+        daemon
+            .spawn_pipeline(vec![0u8; 32_044], SessionContext::default(), false)
+            .await
+            .unwrap();
+
+        // Give any stray spawned write every chance to run before asserting.
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(daemon.state(), DaemonState::Idle);
+    }
+
+    #[tokio::test]
+    async fn a_failed_pipeline_reports_error_then_clears_itself() {
+        let base = stub_asr(500, "boom").await;
+        let mut daemon = test_daemon(&base);
+        daemon.error_linger = Duration::from_millis(25);
+        let daemon = Arc::new(daemon);
+
+        daemon
+            .spawn_pipeline(vec![0u8; 32_044], SessionContext::default(), false)
+            .await
+            .unwrap();
+        assert_eq!(daemon.state(), DaemonState::Error);
+
+        // The overlay only hides on Idle, so an error must clear on its own.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert_eq!(daemon.state(), DaemonState::Idle);
     }
 }

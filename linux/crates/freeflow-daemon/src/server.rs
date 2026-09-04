@@ -75,7 +75,7 @@ async fn handle(daemon: Arc<Daemon>, stream: UnixStream) -> anyhow::Result<()> {
         }
         let response = match serde_json::from_str::<Request>(&line) {
             Ok(request) => dispatch(&daemon, request).await,
-            Err(e) => Response::error(daemon.state().await, format!("bad request: {e}")),
+            Err(e) => Response::error(daemon.state(), format!("bad request: {e}")),
         };
         write_half.write_all(encode(&response).as_bytes()).await?;
         write_half.flush().await?;
@@ -86,25 +86,25 @@ async fn handle(daemon: Arc<Daemon>, stream: UnixStream) -> anyhow::Result<()> {
 async fn dispatch(daemon: &Arc<Daemon>, request: Request) -> Response {
     match request {
         Request::Shortcut { event } => match daemon.handle_shortcut(event).await {
-            Ok(()) => Response::ok(daemon.state().await),
+            Ok(()) => Response::ok(daemon.state()),
             Err(e) => Response::error(DaemonState::Error, e.to_string()),
         },
         Request::CopyAgain => match daemon.copy_again().await {
-            Ok(()) => Response::ok(daemon.state().await),
-            Err(e) => Response::error(daemon.state().await, e.to_string()),
+            Ok(()) => Response::ok(daemon.state()),
+            Err(e) => Response::error(daemon.state(), e.to_string()),
         },
         Request::Cancel => match daemon.cancel().await {
-            Ok(()) => Response::ok(daemon.state().await).with_message("cancelled"),
-            Err(e) => Response::error(daemon.state().await, e.to_string()),
+            Ok(()) => Response::ok(daemon.state()).with_message("cancelled"),
+            Err(e) => Response::error(daemon.state(), e.to_string()),
         },
         Request::Status => {
-            let state = daemon.state().await;
+            let state = daemon.state();
             let mut response = Response::ok(state).with_message(state.label().to_string());
             response.level = daemon.level().await;
             response
         }
         Request::Doctor => {
-            let mut response = Response::ok(daemon.state().await);
+            let mut response = Response::ok(daemon.state());
             response.checks = daemon.doctor().await;
             response.ok = response.checks.iter().all(|c| c.ok);
             response
@@ -112,7 +112,7 @@ async fn dispatch(daemon: &Arc<Daemon>, request: Request) -> Response {
         Request::Bench { wav_path, inject } => {
             match daemon.bench(std::path::Path::new(&wav_path), inject).await {
                 Ok((text, timings)) => {
-                    let mut response = Response::ok(daemon.state().await).with_message(text);
+                    let mut response = Response::ok(daemon.state()).with_message(text);
                     response.timings = Some(freeflow_core::proto::StageTimings {
                         transcription_ms: timings.transcription.as_millis() as u64,
                         cleanup_ms: timings.cleanup.as_millis() as u64,
@@ -120,17 +120,17 @@ async fn dispatch(daemon: &Arc<Daemon>, request: Request) -> Response {
                     });
                     response
                 }
-                Err(e) => Response::error(daemon.state().await, e.to_string()),
+                Err(e) => Response::error(daemon.state(), e.to_string()),
             }
         }
         Request::History { limit } => {
-            let mut response = Response::ok(daemon.state().await);
+            let mut response = Response::ok(daemon.state());
             response.history = daemon.history(limit.clamp(1, 500)).await;
             response
         }
         Request::ClearHistory => match daemon.clear_history().await {
-            Ok(()) => Response::ok(daemon.state().await).with_message("history cleared"),
-            Err(e) => Response::error(daemon.state().await, e.to_string()),
+            Ok(()) => Response::ok(daemon.state()).with_message("history cleared"),
+            Err(e) => Response::error(daemon.state(), e.to_string()),
         },
         Request::Shutdown => {
             daemon.shutdown().await;
