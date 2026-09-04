@@ -124,6 +124,18 @@ fallback_backend = "openai_compat"
 ```
 
 - `cli_harness` drives a locally installed agent CLI (`claude` by default) over its streaming protocol, reusing an existing subscription instead of an API key. Swap harnesses by changing `command`, `args`, and `protocol`.
+  Antigravity's `agy` is supported via `protocol = "agy_stream_json"`; its dialect differs from Claude's and it has no system-prompt flag, so the wrapper travels in each turn.
+  The `live_agy` ignored suite checks the adapter against the real binary:
+
+  ```toml
+  [llm.cli_harness]
+  command = "agy"
+  args = [
+    "--print=", "--input-format", "stream-json", "--output-format", "stream-json",
+    "--model", "gemini-3.1-pro", "--effort", "low", "--disable-slash-commands",
+  ]
+  protocol = "agy_stream_json"
+  ```
 - `openai_compat` is any OpenAI-compatible endpoint: Groq, Gemini's compatibility layer, Ollama, llama.cpp, vLLM.
 - `none` skips cleanup entirely and types the raw transcript.
 

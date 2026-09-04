@@ -131,6 +131,34 @@ fn decode_line(protocol: HarnessProtocol, line: &str) -> HarnessEvent {
                 _ => HarnessEvent::Ignore,
             }
         }
+        HarnessProtocol::AgyStreamJson => {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                return HarnessEvent::Ignore;
+            };
+            match value.get("event").and_then(|e| e.as_str()) {
+                Some("init") => HarnessEvent::Ready,
+                Some("result") => {
+                    let status = value
+                        .pointer("/result/status")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("");
+                    if status == "SUCCESS" {
+                        match value.pointer("/result/response").and_then(|r| r.as_str()) {
+                            Some(text) => HarnessEvent::Final(text.to_string()),
+                            None => HarnessEvent::Error("result event carried no text".into()),
+                        }
+                    } else {
+                        let error = value
+                            .pointer("/result/error")
+                            .and_then(|e| e.as_str())
+                            .filter(|e| !e.is_empty())
+                            .unwrap_or("harness reported an error");
+                        HarnessEvent::Error(format!("{status}: {error}"))
+                    }
+                }
+                _ => HarnessEvent::Ignore,
+            }
+        }
     }
 }
 
@@ -144,6 +172,15 @@ fn encode_turn(protocol: HarnessProtocol, text: &str) -> String {
             let message = serde_json::json!({
                 "type": "user",
                 "message": { "role": "user", "content": [{ "type": "text", "text": text }] },
+            });
+            format!("{message}\n")
+        }
+        HarnessProtocol::AgyStreamJson => {
+            // agy has no system-prompt flag, so the wrapper rides at the top
+            // of every turn. 232 characters against a ~6k agent bootstrap.
+            let message = serde_json::json!({
+                "event": "user",
+                "message": { "content": format!("{WRAPPER_SYSTEM_PROMPT}\n\n{text}") },
             });
             format!("{message}\n")
         }
@@ -161,10 +198,13 @@ struct Worker {
 impl Worker {
     async fn spawn(config: &CliHarnessConfig) -> Result<Self, String> {
         let mut command = Command::new(&config.command);
+        command.args(&config.args);
+        // agy has no system-prompt flag and rejects unknown flags; its wrapper
+        // is embedded in each turn by `encode_turn` instead.
+        if config.protocol != HarnessProtocol::AgyStreamJson {
+            command.arg("--system-prompt").arg(WRAPPER_SYSTEM_PROMPT);
+        }
         command
-            .args(&config.args)
-            .arg("--system-prompt")
-            .arg(WRAPPER_SYSTEM_PROMPT)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -508,5 +548,54 @@ mod tests {
     fn plain_stdio_flattens_newlines_so_a_turn_stays_one_line() {
         let encoded = encode_turn(HarnessProtocol::PlainStdio, "a\nb");
         assert_eq!(encoded, "a\\nb\n");
+    }
+
+    // Shapes captured from a live `agy` 1.1.24 run, not invented: see the
+    // ignored `live_agy` suite for the check against the real binary.
+    #[test]
+    fn agy_stream_json_lines_are_classified() {
+        let p = HarnessProtocol::AgyStreamJson;
+        assert_eq!(
+            decode_line(p, r#"{"event":"init","conversation_id":"x","init":{}}"#),
+            HarnessEvent::Ready
+        );
+        assert_eq!(
+            decode_line(
+                p,
+                r#"{"event":"result","result":{"status":"SUCCESS","response":"done\n"}}"#
+            ),
+            HarnessEvent::Final("done\n".into())
+        );
+        assert_eq!(
+            decode_line(
+                p,
+                r#"{"event":"result","result":{"status":"ERROR","response":"","error":"boom"}}"#
+            ),
+            HarnessEvent::Error("ERROR: boom".into())
+        );
+        // A failed result with no error text still reports the status.
+        assert_eq!(
+            decode_line(p, r#"{"event":"result","result":{"status":"TIMEOUT"}}"#),
+            HarnessEvent::Error("TIMEOUT: harness reported an error".into())
+        );
+        assert_eq!(
+            decode_line(p, r#"{"event":"message","message":{}}"#),
+            HarnessEvent::Ignore
+        );
+        assert_eq!(decode_line(p, "starting up..."), HarnessEvent::Ignore);
+    }
+
+    #[test]
+    fn agy_turns_embed_the_wrapper_because_there_is_no_system_prompt_flag() {
+        let encoded = encode_turn(
+            HarnessProtocol::AgyStreamJson,
+            "INSTRUCTIONS:\nx\n\nINPUT:\ny",
+        );
+        assert!(encoded.ends_with('\n'));
+        let value: serde_json::Value = serde_json::from_str(encoded.trim()).unwrap();
+        assert_eq!(value["event"], "user");
+        let content = value["message"]["content"].as_str().unwrap();
+        assert!(content.starts_with(WRAPPER_SYSTEM_PROMPT));
+        assert!(content.ends_with("INPUT:\ny"));
     }
 }

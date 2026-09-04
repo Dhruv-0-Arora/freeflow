@@ -134,6 +134,11 @@ impl Default for LlmConfig {
 pub enum HarnessProtocol {
     /// Claude Code's `--input-format stream-json --output-format stream-json`.
     ClaudeStreamJson,
+    /// Antigravity's (`agy`) stream-json dialect: `{"event":"user","message":
+    /// {"content":...}}` in, `{"event":"result","result":{...}}` out. Unlike
+    /// Claude's it has no system-prompt flag, so the wrapper travels at the
+    /// top of each user turn instead.
+    AgyStreamJson,
     /// One request on stdin, one response on stdout, no framing.
     PlainStdio,
 }
