@@ -56,6 +56,7 @@
             clippy
             rust-analyzer
             pkg-config
+            alsa-lib
           ]
           ++ runtimeDeps;
 

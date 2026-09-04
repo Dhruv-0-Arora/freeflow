@@ -21,11 +21,6 @@ repository = "https://github.com/zachlatta/freeflow"
 [workspace.dependencies]
 freeflow-config = { path = "crates/freeflow-config" }
 freeflow-core = { path = "crates/freeflow-core" }
-freeflow-llm = { path = "crates/freeflow-llm" }
-freeflow-asr = { path = "crates/freeflow-asr" }
-freeflow-platform = { path = "crates/freeflow-platform" }
-
-anyhow = "1"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
