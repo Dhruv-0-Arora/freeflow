@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/freeflow-config",
     "crates/freeflow-core",
     "crates/freeflow-llm",
     "crates/freeflow-asr",
@@ -18,6 +19,7 @@ license = "MIT"
 repository = "https://github.com/zachlatta/freeflow"
 
 [workspace.dependencies]
+freeflow-config = { path = "crates/freeflow-config" }
 freeflow-core = { path = "crates/freeflow-core" }
 freeflow-llm = { path = "crates/freeflow-llm" }
 freeflow-asr = { path = "crates/freeflow-asr" }
