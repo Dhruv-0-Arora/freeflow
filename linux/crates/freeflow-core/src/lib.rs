@@ -7,8 +7,15 @@
 
 pub mod cooldown;
 pub mod model_config;
+pub mod prompt;
+pub mod prompt_text;
 pub mod shortcut;
 pub mod transcript;
+
+pub use prompt::{
+    apply_output_language, build_cleanup_prompt, build_edit_mode_prompt,
+    build_verbatim_translation_prompt, merge_vocabulary_terms, Prompt,
+};
 
 pub use cooldown::{rate_limit_cooldown, LlmCooldownManager, RateLimitCooldown};
 pub use model_config::{config_for, strip_think_tags, ModelConfig};
