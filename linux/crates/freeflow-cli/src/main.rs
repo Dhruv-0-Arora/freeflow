@@ -128,26 +128,11 @@ async fn send(request: Request) -> anyhow::Result<Response> {
 
 /// The bindings to paste into `hyprland.conf`.
 ///
-/// `bindri` rather than `bindr` is essential. Hyprland filters binds against
-/// the current modifier mask on release as well as press, so with a plain
-/// `bindr` the release never fires if the user lifts SUPER before D - and
-/// recording would continue forever. The `i` flag ignores modifiers.
-const HYPRLAND_BINDS: &str = r#"# FreeFlow dictation
-# Hold SUPER+ALT+D to talk; release to transcribe.
-bind   = SUPER_ALT, D, exec, freeflow hold press
-bindri = SUPER_ALT, D, exec, freeflow hold release
-
-# Tap to start, tap again to stop.
-bind   = SUPER_ALT, T, exec, freeflow toggle press
-bindri = SUPER_ALT, T, exec, freeflow toggle release
-
-# Latch an in-progress hold so it keeps recording after you let go.
-bind   = SUPER_ALT_SHIFT, D, exec, freeflow latch
-
-# Re-paste the last result, and abandon a dictation.
-bind   = SUPER_ALT, C, exec, freeflow copy-again
-bind   = SUPER_ALT, Escape, exec, freeflow cancel
-"#;
+/// `binds.conf` is the canonical copy: the Home Manager module renders the
+/// same text from its defaults and the README quotes it, with a flake check
+/// holding all three together. Press binds only - release detection lives in
+/// the daemon, because a compositor release bind consumes the key's press.
+const HYPRLAND_BINDS: &str = include_str!("../binds.conf");
 
 fn print_status(response: &Response) {
     let mut line = format!("{:?}", response.state);

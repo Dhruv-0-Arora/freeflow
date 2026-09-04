@@ -8,9 +8,9 @@
 //! same directory. Those reduce raw macOS virtual keycodes and `NSEvent`
 //! modifier masks into the [`ShortcutEvent`]s consumed here. On Wayland the
 //! compositor owns key binding, so `freeflow-cli` emits [`ShortcutEvent`]
-//! directly from Hyprland `bind`/`bindr` dispatches and there is no keycode
-//! layer to reduce. Reviving them would only make sense alongside an evdev
-//! input backend.
+//! directly from Hyprland `bind` dispatches and there is no keycode layer to
+//! reduce. Reviving them would only make sense if the daemon's evdev release
+//! watcher ever grew into a full input backend.
 
 use serde::{Deserialize, Serialize};
 
@@ -26,9 +26,11 @@ pub enum RecordingTriggerMode {
 
 /// An edge-triggered shortcut signal.
 ///
-/// On Linux these arrive from the compositor via `freeflow-cli`: a Hyprland
-/// `bind` produces an `*Activated` event and the matching `bindr` produces the
-/// `*Deactivated` event.
+/// On Linux an `*Activated` event arrives from a Hyprland `bind` via
+/// `freeflow-cli`, and the matching `*Deactivated` event is synthesised by
+/// the daemon's evdev release watcher. (A compositor release bind would
+/// consume the key's press for every modifier state, making the bare key
+/// untypable.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ShortcutEvent {

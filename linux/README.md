@@ -20,7 +20,7 @@ Everything below the prompts is new, because none of it could be carried over.
 
 | | macOS | Linux |
 |---|---|---|
-| Hotkeys | `CGEvent` tap, needs Accessibility permission | Hyprland `bind`/`bindri` dispatching to `freeflow` |
+| Hotkeys | `CGEvent` tap, needs Accessibility permission | Hyprland press binds dispatching to `freeflow`; releases watched on `/dev/input` |
 | Default shortcut | Hold `Fn` | Hold `Super+Alt+D` — `Fn` is handled in keyboard firmware on PCs and never reaches the OS |
 | Typing the result | Clipboard + synthetic Cmd-V + restore | `wtype` types it directly; the clipboard is never touched |
 | Selected text | Accessibility API | The PRIMARY selection, which Wayland populates on highlight |
@@ -72,17 +72,32 @@ Without Home Manager, `nix build .#freeflow`, run `freeflowd` yourself, and add 
 `freeflow binds` prints them. The defaults:
 
 ```
-bind   = SUPER_ALT, D, exec, freeflow hold press
-bindri = SUPER_ALT, D, exec, freeflow hold release
-bind   = SUPER_ALT, T, exec, freeflow toggle press
-bindri = SUPER_ALT, T, exec, freeflow toggle release
-bind   = SUPER_ALT_SHIFT, D, exec, freeflow latch
-bind   = SUPER_ALT, C, exec, freeflow copy-again
-bind   = SUPER_ALT, Escape, exec, freeflow cancel
+# FreeFlow dictation - press binds only.
+# The daemon watches /dev/input for key releases itself while a session is
+# active. Compositor release binds are unusable here: Hyprland consumes the
+# press of a release-bound key, and the ignore-mods flag needed to catch a
+# release after the modifiers are lifted extends that to every unmodified
+# press - which would make the bound letters untypable everywhere.
+
+# Hold to talk; release to transcribe.
+bind = SUPER_ALT, D, exec, freeflow hold press --key D
+
+# Tap to start, tap again to stop.
+bind = SUPER_ALT, T, exec, freeflow toggle press --key T
+
+# Convert an in-progress hold into a toggle that outlives the key release.
+bind = SUPER_ALT_SHIFT, D, exec, freeflow latch --key T
+
+# Re-paste the last result, and abandon a dictation.
+bind = SUPER_ALT, C, exec, freeflow copy-again
+bind = SUPER_ALT, Escape, exec, freeflow cancel
 ```
 
-**Release edges must use `bindri`, never `bindr`.**
-Hyprland filters binds against the current modifier mask on release as well as on press, so with a plain `bindr` the release never fires if you let go of `SUPER` before `D` — and recording would continue until the daemon's watchdog stopped it. The `i` flag ignores modifiers. A flake check asserts this.
+**Release edges are never bound in the compositor.**
+Hyprland consumes the press of a release-bound key, and the ignore-modifiers flag needed to catch a release after the modifiers are lifted extends that to every unmodified press - a `bindri` on D and T once made plain `d` and `t` untypable in every application.
+Instead, each session bind passes its main key via `--key`, and the daemon polls `/dev/input` for that key's release only while a session is active - nothing reads input devices outside a dictation, and nothing is ever grabbed.
+This requires the user to be in the `input` group; `freeflow doctor` reports it as the `keywatch` check.
+A flake check asserts no release bind can reappear, and that this file, the module template, and `freeflow binds` all carry identical bind text.
 
 ## Configuration
 
@@ -152,7 +167,7 @@ their latency. Above, `custom_vocabulary = [ "NixOS" ]` is what turned
 Run `freeflow doctor` first. It checks the microphone, `wtype`, the compositor, the LLM backend, and the transcription endpoint.
 
 - **Nothing happens on the hotkey.** `systemctl --user status freeflow`, then `journalctl --user -u freeflow -f`.
-- **Recording never stops.** A release binding is using `bindr` instead of `bindri`.
+- **Recording never stops on release.** Check the `keywatch` line in `freeflow doctor`: if no input device is readable, add the user to the `input` group. The watchdog still stops the recording at `audio.max_recording_seconds`.
 - **Silence produces nothing.** Correct. whisper.cpp emits `[BLANK_AUDIO]`, which is filtered, and an empty transcript skips the LLM entirely.
 - **Wrong microphone.** `freeflow devices`, then set `audio.device`. The overlay's level meter is the fastest way to spot this.
 - **Text does not appear in one specific app.** Some Electron, Java, and XWayland clients mishandle synthesised keys. Set a per-app override:

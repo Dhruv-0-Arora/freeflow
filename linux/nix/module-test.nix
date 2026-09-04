@@ -71,6 +71,9 @@ let
     }).package;
   cudaArchFlags = lib.filter (f: lib.hasInfix "CUDA_ARCHITECTURES" f) cudaWhisper.cmakeFlags;
   binds = enabled.wayland.windowManager.hyprland.extraConfig;
+  # The canonical copy of the bind text: `freeflow binds` prints it via
+  # include_str! and the README quotes it.
+  bindsFile = builtins.readFile ../crates/freeflow-cli/binds.conf;
 
   assertions = [
     {
@@ -94,22 +97,36 @@ let
       ok = !(lib.hasInfix "--convert" whisperExec);
     }
     {
-      # A plain `bindr` misses the release when the modifier is lifted first,
-      # which would leave the microphone recording.
-      name = "release bindings use bindri rather than bindr";
-      ok = lib.hasInfix "bindri = " binds && !(lib.hasInfix "\nbindr = " binds);
+      # Hyprland consumes the press of a release-bound key, and the
+      # ignore-mods flag extends that to every modifier state: a `bindri` on
+      # D and T once made plain `d` and `t` untypable everywhere. Releases
+      # are detected by the daemon via /dev/input instead - the compositor
+      # must carry press binds only. ("bindr" is a substring of "bindri", so
+      # this catches both.)
+      name = "no compositor release bindings are emitted";
+      ok = !(lib.hasInfix "bindr" binds);
     }
     {
-      name = "every action is bound";
+      name = "every action is bound and session binds carry their key";
       ok = builtins.all (a: lib.hasInfix "freeflow ${a}" binds) [
-        "hold press"
-        "hold release"
-        "toggle press"
-        "toggle release"
-        "latch"
+        "hold press --key D"
+        "toggle press --key T"
+        "latch --key T"
         "copy-again"
         "cancel"
       ];
+    }
+    {
+      # Three copies of the bind text exist: this module's template, the
+      # binds.conf baked into `freeflow binds`, and the README. Equality on
+      # the default render plus the quote check below means none can drift
+      # without failing `nix flake check`.
+      name = "the default bindings match the canonical binds.conf";
+      ok = binds == bindsFile;
+    }
+    {
+      name = "the README quotes the canonical bindings verbatim";
+      ok = lib.hasInfix bindsFile (builtins.readFile ../README.md);
     }
     {
       # `cmakeCudaArchitecturesString` is derived from cudaCapabilities rather
