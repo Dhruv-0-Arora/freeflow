@@ -14,6 +14,7 @@
 //! which in practice means some Electron, Java, and XWayland applications.
 
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use freeflow_config::InjectionMethod;
 use thiserror::Error;
@@ -30,12 +31,26 @@ pub enum InjectError {
     Clipboard(#[from] clipboard::ClipboardError),
 }
 
-fn run_wtype(args: &[&str]) -> Result<(), InjectError> {
-    let output = Command::new("wtype")
+/// Allowance for spawning wtype and its compositor round-trip, on top of the
+/// time the keystrokes themselves need.
+const BASE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long a typing run may take before it is presumed hung.
+///
+/// Scales with the work: each character costs the configured inter-key delay,
+/// so a long transcript typed slowly is not mistaken for a hang.
+fn type_timeout(delay_ms: u64, chars: usize) -> Duration {
+    BASE_TIMEOUT + Duration::from_millis(delay_ms.saturating_mul(chars as u64))
+}
+
+/// Runs wtype, killing it at the deadline. An unbounded wait here would wedge
+/// the whole pipeline behind a stuck compositor round-trip.
+fn run_wtype(args: &[&str], timeout: Duration) -> Result<(), InjectError> {
+    let mut child = Command::new("wtype")
         .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .output()
+        .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 InjectError::MissingWtype
@@ -43,10 +58,36 @@ fn run_wtype(args: &[&str]) -> Result<(), InjectError> {
                 InjectError::Wtype(e.to_string())
             }
         })?;
-    if !output.status.success() {
-        return Err(InjectError::Wtype(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(InjectError::Wtype(format!(
+                        "timed out after {:.1}s",
+                        timeout.as_secs_f32()
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(InjectError::Wtype(e.to_string()));
+            }
+        }
+    };
+    if !status.success() {
+        use std::io::Read;
+        let mut stderr = String::new();
+        if let Some(mut pipe) = child.stderr.take() {
+            let _ = pipe.read_to_string(&mut stderr);
+        }
+        return Err(InjectError::Wtype(stderr.trim().to_string()));
     }
     Ok(())
 }
@@ -74,7 +115,10 @@ pub fn type_text(text: &str, delay_ms: u64) -> Result<(), InjectError> {
         return Ok(());
     }
     let args = type_args(text, delay_ms);
-    run_wtype(&args.iter().map(String::as_str).collect::<Vec<_>>())
+    run_wtype(
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+        type_timeout(delay_ms, text.chars().count()),
+    )
 }
 
 /// Copies the text and sends Ctrl-V, then restores the previous clipboard.
@@ -85,7 +129,7 @@ pub fn paste_text(text: &str) -> Result<(), InjectError> {
     let preserved = PreservedClipboard::capture();
     clipboard::write(Selection::Clipboard, text)?;
 
-    let result = run_wtype(&["-M", "ctrl", "-k", "v", "-m", "ctrl"]);
+    let result = run_wtype(&["-M", "ctrl", "-k", "v", "-m", "ctrl"], BASE_TIMEOUT);
 
     // Give the target a moment to read the selection before taking it back;
     // restoring immediately can win the race and paste the old contents.
@@ -96,7 +140,7 @@ pub fn paste_text(text: &str) -> Result<(), InjectError> {
 
 /// Presses Return, for the spoken "press enter" command.
 pub fn press_enter() -> Result<(), InjectError> {
-    run_wtype(&["-k", "Return"])
+    run_wtype(&["-k", "Return"], BASE_TIMEOUT)
 }
 
 /// Injects `text` using the configured method.
@@ -141,5 +185,16 @@ mod tests {
         let args = type_args(text, 0);
         assert_eq!(args.len(), 2);
         assert_eq!(args[1], text);
+    }
+
+    #[test]
+    fn the_typing_deadline_scales_with_the_keystroke_delay() {
+        // No configured delay: only the base allowance.
+        assert_eq!(type_timeout(0, 10_000), BASE_TIMEOUT);
+        // 12ms per key over 500 characters adds 6 seconds of legitimate work.
+        assert_eq!(
+            type_timeout(12, 500),
+            BASE_TIMEOUT + Duration::from_millis(6_000)
+        );
     }
 }
