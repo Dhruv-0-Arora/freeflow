@@ -243,6 +243,16 @@ pub fn start(device: Option<&str>, max_seconds: u64) -> Result<Recording, AudioE
     }
 }
 
+/// How many PCM16 samples an encoded WAV carries.
+///
+/// A very short tap can stop the recorder before the first capture callback
+/// has delivered anything, producing a header-only file. whisper-server
+/// rejects those with HTTP 400, so callers need a way to notice before
+/// posting.
+pub fn wav_sample_count(wav: &[u8]) -> usize {
+    wav.len().saturating_sub(44) / 2
+}
+
 /// Wraps PCM16 samples in a WAV container.
 pub fn encode_wav(samples: &[i16]) -> Vec<u8> {
     let data_len = (samples.len() * 2) as u32;
@@ -296,6 +306,14 @@ mod tests {
         let wav = encode_wav(&[]);
         assert_eq!(wav.len(), 44);
         assert_eq!(u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]), 0);
+    }
+
+    #[test]
+    fn sample_counts_round_trip_through_encoding() {
+        assert_eq!(wav_sample_count(&encode_wav(&[])), 0);
+        assert_eq!(wav_sample_count(&encode_wav(&[0; 3200])), 3200);
+        // Garbage shorter than a header is still zero, not a panic.
+        assert_eq!(wav_sample_count(b"RIFF"), 0);
     }
 
     #[test]

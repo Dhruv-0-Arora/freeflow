@@ -15,7 +15,11 @@ use freeflow_core::pipeline::{self, Decision, Outcome, PipelineInput, SessionInt
 use freeflow_core::proto::DaemonState;
 use freeflow_core::transcript;
 use freeflow_llm::{LlmBackend, LlmRequest};
-use freeflow_platform::{clipboard, context, inject};
+use freeflow_platform::{audio, clipboard, context, inject};
+
+/// Recordings shorter than this cannot hold speech and are treated as silent.
+/// 200ms of 16kHz mono.
+const MIN_SAMPLES: usize = audio::SAMPLE_RATE as usize / 5;
 
 /// Everything captured at hotkey-down, before recording starts.
 ///
@@ -105,7 +109,15 @@ pub async fn run(
 
     report(DaemonState::Transcribing);
     let started = Instant::now();
-    let raw_transcript = asr.transcribe_bytes(wav, "audio.wav".to_string()).await?;
+    // A tap shorter than the first capture callback yields a header-only WAV,
+    // which whisper-server rejects with HTTP 400. Route anything too short to
+    // hold speech through the empty-transcript path instead of the network.
+    let raw_transcript = if audio::wav_sample_count(&wav) < MIN_SAMPLES {
+        tracing::info!("recording too short to transcribe; skipping");
+        String::new()
+    } else {
+        asr.transcribe_bytes(wav, "audio.wav".to_string()).await?
+    };
     timings.transcription = started.elapsed();
 
     let vocabulary = &config.dictation.custom_vocabulary;

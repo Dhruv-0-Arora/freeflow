@@ -639,6 +639,21 @@ mod tests {
         assert_eq!(daemon.state(), DaemonState::Idle);
     }
 
+    // A sub-200ms tap produces a header-only WAV. Sending it would come back
+    // as HTTP 400 and surface as an error for what is just a twitch of the
+    // hotkey; it must take the silent-recording path instead.
+    #[tokio::test]
+    async fn a_too_short_recording_skips_transcription_and_ends_idle() {
+        let base = stub_asr(400, "Invalid request").await;
+        let daemon = Arc::new(test_daemon(&base));
+
+        daemon
+            .spawn_pipeline(vec![0u8; 44], SessionContext::default(), false)
+            .await
+            .unwrap();
+        assert_eq!(daemon.state(), DaemonState::Idle);
+    }
+
     #[tokio::test]
     async fn a_failed_pipeline_reports_error_then_clears_itself() {
         let base = stub_asr(500, "boom").await;
