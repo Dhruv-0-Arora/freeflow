@@ -5,8 +5,13 @@
 //! lives in `freeflow-platform`; providers live in `freeflow-llm` and
 //! `freeflow-asr`.
 
+pub mod cooldown;
+pub mod model_config;
 pub mod shortcut;
 pub mod transcript;
+
+pub use cooldown::{rate_limit_cooldown, LlmCooldownManager, RateLimitCooldown};
+pub use model_config::{config_for, strip_think_tags, ModelConfig};
 
 pub use transcript::{
     appears_to_have_executed_instruction, parse_transcription_response,
