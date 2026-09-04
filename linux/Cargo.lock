@@ -340,7 +340,10 @@ name = "freeflow-platform"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "freeflow-config",
  "hound",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tracing",
 ]

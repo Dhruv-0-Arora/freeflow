@@ -7,3 +7,6 @@
 //! narrow interfaces.
 
 pub mod audio;
+pub mod clipboard;
+pub mod context;
+pub mod inject;
