@@ -3,3 +3,7 @@ build/
 *.swp
 .env
 .build
+target/
+result
+result-*
+.direnv/

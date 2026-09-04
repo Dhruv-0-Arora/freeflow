@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/freeflow-core",
+    "crates/freeflow-llm",
+    "crates/freeflow-asr",
+    "crates/freeflow-platform",
+    "crates/freeflow-daemon",
+    "crates/freeflow-cli",
+    "crates/freeflow-gui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+license = "MIT"
+repository = "https://github.com/zachlatta/freeflow"
+
+[workspace.dependencies]
+freeflow-core = { path = "crates/freeflow-core" }
+freeflow-llm = { path = "crates/freeflow-llm" }
+freeflow-asr = { path = "crates/freeflow-asr" }
+freeflow-platform = { path = "crates/freeflow-platform" }
+
+anyhow = "1"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "net", "sync", "time", "fs"] }
+toml = "0.8"
+tracing = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
