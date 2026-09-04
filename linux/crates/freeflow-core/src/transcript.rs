@@ -52,7 +52,7 @@ pub fn parse_transcription_response(
         if is_hallucination(text, &value) {
             return Ok(String::new());
         }
-        return Ok(text.to_string());
+        return Ok(strip_non_speech_annotations(text));
     }
 
     let plain_text = std::str::from_utf8(data).unwrap_or_default();
@@ -95,6 +95,43 @@ fn is_hallucination(text: &str, json: &Value) -> bool {
     };
 
     no_speech_prob >= HALLUCINATION_NO_SPEECH_THRESHOLD
+}
+
+/// Non-speech annotations that whisper.cpp emits inline.
+///
+/// The hosted Whisper APIs the macOS app targets never produce these - they
+/// hallucinate stock phrases instead, which is what [`HALLUCINATION_PHRASES`]
+/// handles. Running whisper.cpp locally introduces a second failure mode:
+/// dictating into silence yields a literal `[BLANK_AUDIO]`, which would
+/// otherwise be pasted into the user's document.
+const NON_SPEECH_ANNOTATIONS: &[&str] = &[
+    "[blank_audio]",
+    "[silence]",
+    "[inaudible]",
+    "[music]",
+    "[sound]",
+    "[noise]",
+    "[laughter]",
+    "[applause]",
+    "(blank_audio)",
+    "(silence)",
+    "(inaudible)",
+];
+
+/// Removes whisper.cpp's non-speech annotations.
+///
+/// Only exact known markers are removed, and only as whole tokens, so a
+/// bracketed phrase the user actually dictated survives untouched.
+pub fn strip_non_speech_annotations(text: &str) -> String {
+    let mut result = text.to_string();
+    for marker in NON_SPEECH_ANNOTATIONS {
+        // Case-insensitive replace without pulling in a regex for it.
+        while let Some(at) = result.to_lowercase().find(marker) {
+            result.replace_range(at..at + marker.len(), " ");
+        }
+    }
+    // Collapse the whitespace the removals leave behind.
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn strip_wrapping_quotes(value: &str) -> String {
@@ -304,6 +341,36 @@ mod tests {
             )
             .unwrap(),
             "Synthetic project update."
+        );
+    }
+
+    // whisper.cpp emits these; the hosted APIs the macOS app targets do not,
+    // so this behaviour has no Swift counterpart to port.
+    #[test]
+    fn whisper_cpp_non_speech_annotations_are_removed() {
+        assert_eq!(
+            parse_transcription_response(br#"{"text":" [BLANK_AUDIO]\n"}"#).unwrap(),
+            ""
+        );
+        assert_eq!(
+            parse_transcription_response(br#"{"text":"[SILENCE] hello there [MUSIC]"}"#).unwrap(),
+            "hello there"
+        );
+        // Case and spacing variations still collapse.
+        assert_eq!(strip_non_speech_annotations("  [blank_audio]  "), "");
+        assert_eq!(strip_non_speech_annotations("a [Sound] b"), "a b");
+    }
+
+    // Guard against over-eager stripping: only the known markers go.
+    #[test]
+    fn bracketed_speech_that_is_not_an_annotation_survives() {
+        assert_eq!(
+            strip_non_speech_annotations("see [note 4] and [TODO] later"),
+            "see [note 4] and [TODO] later"
+        );
+        assert_eq!(
+            parse_transcription_response(br#"{"text":"ship it [urgent]"}"#).unwrap(),
+            "ship it [urgent]"
         );
     }
 

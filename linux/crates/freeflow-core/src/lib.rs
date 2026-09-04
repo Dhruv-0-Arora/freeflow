@@ -29,7 +29,7 @@ pub use model_config::{config_for, strip_think_tags, ModelConfig};
 pub use transcript::{
     appears_to_have_executed_instruction, parse_transcription_response,
     sanitize_command_mode_transcript, sanitize_post_processed_transcript,
-    sanitize_verbatim_translation, TranscriptionResponseParsingError,
+    sanitize_verbatim_translation, strip_non_speech_annotations, TranscriptionResponseParsingError,
 };
 
 pub use shortcut::{
