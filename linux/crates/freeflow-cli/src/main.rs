@@ -25,18 +25,31 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Push-to-talk edge. Bind `press` to `bind` and `release` to `bindri`.
+    /// Push-to-talk edge. Bind `press` to a Hyprland `bind`; with `--key`
+    /// the daemon detects the release itself via /dev/input. (A compositor
+    /// release bind would consume the key's press for every modifier state.)
     Hold {
         #[arg(value_enum)]
         edge: Edge,
+        /// The bind's main key as Hyprland spells it, e.g. `D`.
+        #[arg(long)]
+        key: Option<String>,
     },
     /// Tap to start, tap again to stop.
     Toggle {
         #[arg(value_enum, default_value = "press")]
         edge: Edge,
+        /// The bind's main key as Hyprland spells it, e.g. `T`.
+        #[arg(long)]
+        key: Option<String>,
     },
     /// Convert an in-progress hold into a toggle, so it survives key release.
-    Latch,
+    Latch {
+        /// The *toggle* bind's key: releasing it is what arms the toggle to
+        /// stop, exactly as if the toggle had been started by hand.
+        #[arg(long)]
+        key: Option<String>,
+    },
     /// Re-inject the last result into the currently focused window.
     CopyAgain,
     /// Abandon the current dictation without injecting.
@@ -184,25 +197,25 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let request = match cli.command {
-        Command::Hold { edge } => Request::Shortcut {
+        Command::Hold { edge, key } => Request::Shortcut {
             event: match edge {
                 Edge::Press => ShortcutEvent::HoldActivated,
                 Edge::Release => ShortcutEvent::HoldDeactivated,
             },
-            key: None,
+            key,
         },
-        Command::Toggle { edge } => Request::Shortcut {
+        Command::Toggle { edge, key } => Request::Shortcut {
             event: match edge {
                 Edge::Press => ShortcutEvent::ToggleActivated,
                 Edge::Release => ShortcutEvent::ToggleDeactivated,
             },
-            key: None,
+            key,
         },
         // Latching reuses the toggle edge: the session machine treats a toggle
         // arriving during a hold as "switch to toggle mode".
-        Command::Latch => Request::Shortcut {
+        Command::Latch { key } => Request::Shortcut {
             event: ShortcutEvent::ToggleActivated,
-            key: None,
+            key,
         },
         Command::CopyAgain => Request::CopyAgain,
         Command::Cancel => Request::Cancel,

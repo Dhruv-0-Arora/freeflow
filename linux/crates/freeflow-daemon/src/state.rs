@@ -12,7 +12,7 @@ use freeflow_core::shortcut::{
     ShortcutEvent,
 };
 use freeflow_llm::{CliHarnessBackend, LlmBackend, OpenAiCompatBackend, RoutingBackend};
-use freeflow_platform::{audio, inject};
+use freeflow_platform::{audio, inject, keywatch};
 use tokio::sync::{watch, Mutex};
 
 use crate::history::{History, NewEntry};
@@ -44,6 +44,10 @@ pub struct Daemon {
     /// The overlay only hides on `Idle`, so an uncleared error would sit on
     /// screen until the next dictation.
     error_linger: Duration,
+    /// Watches `/dev/input` for the session key's release while a session is
+    /// active. `None` the rest of the time, so input devices are only read
+    /// between the starting press and the ending release.
+    watcher: std::sync::Mutex<Option<keywatch::KeyWatcher>>,
     /// The last injected text, so `copy-again` can re-deliver a result that
     /// landed in the wrong window.
     last_result: Mutex<Option<String>>,
@@ -141,6 +145,7 @@ impl Daemon {
             active: Mutex::new(None),
             state: watch::channel(DaemonState::Idle).0,
             error_linger: ERROR_LINGER,
+            watcher: std::sync::Mutex::new(None),
             last_result: Mutex::new(None),
         })
     }
@@ -170,19 +175,80 @@ impl Daemon {
     }
 
     /// Feeds one compositor-dispatched shortcut edge into the session machine.
-    pub async fn handle_shortcut(self: &Arc<Self>, event: ShortcutEvent) -> anyhow::Result<()> {
+    ///
+    /// `key` is the bind's main key when the edge came from a Hyprland press
+    /// bind. Release edges are not bound in the compositor at all - a release
+    /// bind consumes the key's press for every modifier state - so a session
+    /// arms an evdev watch on its key and synthesises the release edge itself.
+    pub async fn handle_shortcut(
+        self: &Arc<Self>,
+        event: ShortcutEvent,
+        key: Option<String>,
+    ) -> anyhow::Result<()> {
         let busy = Self::is_busy(self.state());
         let action = self.session.lock().await.handle(event, busy);
 
         match action {
-            Some(DictationShortcutAction::Start(mode)) => self.start_recording(mode).await,
+            Some(DictationShortcutAction::Start(mode)) => {
+                self.start_recording(mode).await?;
+                if let Some(key) = key {
+                    let release = match mode {
+                        RecordingTriggerMode::Hold => ShortcutEvent::HoldDeactivated,
+                        RecordingTriggerMode::Toggle => ShortcutEvent::ToggleDeactivated,
+                    };
+                    self.arm_release_watch(&key, release);
+                }
+                Ok(())
+            }
             Some(DictationShortcutAction::Stop) => self.stop_and_process().await,
             Some(DictationShortcutAction::SwitchedToToggle) => {
                 tracing::info!("hold latched into toggle mode");
+                // The latch bind passes the *toggle* key: its release is what
+                // arms the toggle to stop. The latch chord does not hold that
+                // key, so the watch usually fires straight away - which is
+                // exactly the arming the old compositor release bind provided.
+                if let Some(key) = key {
+                    self.arm_release_watch(&key, ShortcutEvent::ToggleDeactivated);
+                }
                 Ok(())
             }
             None => Ok(()),
         }
+    }
+
+    /// Watches the session key on `/dev/input` and feeds its release back
+    /// into the session machine, exactly as if a compositor bind had
+    /// dispatched it.
+    fn arm_release_watch(self: &Arc<Self>, key_name: &str, release: ShortcutEvent) {
+        let Some(code) = freeflow_core::keymap::keycode(key_name) else {
+            tracing::warn!(
+                key = key_name,
+                "unknown key name; release must come from `freeflow ... release` or the watchdog"
+            );
+            return;
+        };
+        let handle = tokio::runtime::Handle::current();
+        let daemon = Arc::downgrade(self);
+        match keywatch::watch_release(code, move || {
+            let Some(daemon) = daemon.upgrade() else {
+                return;
+            };
+            handle.spawn(async move {
+                if let Err(e) = daemon.handle_shortcut(release, None).await {
+                    tracing::warn!(error = %e, "release edge failed");
+                }
+            });
+        }) {
+            Ok(watcher) => *self.watcher.lock().unwrap() = Some(watcher),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "cannot watch for the key release; release must come from `freeflow ... release` or the watchdog"
+            ),
+        }
+    }
+
+    fn clear_release_watch(&self) {
+        self.watcher.lock().unwrap().take();
     }
 
     async fn start_recording(self: &Arc<Self>, mode: RecordingTriggerMode) -> anyhow::Result<()> {
@@ -220,6 +286,9 @@ impl Daemon {
     }
 
     async fn stop_and_process(self: &Arc<Self>) -> anyhow::Result<()> {
+        // The session is over however we got here - key release, second tap,
+        // or the watchdog - so stop reading input devices.
+        self.clear_release_watch();
         let Some(active) = self.active.lock().await.take() else {
             return Ok(());
         };
@@ -403,6 +472,7 @@ impl Daemon {
     /// Abandons the current recording without injecting.
     pub async fn cancel(&self) -> anyhow::Result<()> {
         self.session.lock().await.reset();
+        self.clear_release_watch();
         // Dropping the recording stops capture; the audio is discarded.
         self.active.lock().await.take();
         self.set_state(DaemonState::Idle);
@@ -445,6 +515,19 @@ impl Daemon {
             name: "wtype".into(),
             ok: inject::wtype_available(),
             detail: "types text into the focused window".into(),
+        });
+
+        // KEY_D stands in for "any ordinary key": if no device is readable
+        // for it, none will be for the configured binds either.
+        let watchable = keywatch::watchable_device_count(32);
+        checks.push(DoctorCheck {
+            name: "keywatch".into(),
+            ok: watchable > 0,
+            detail: if watchable > 0 {
+                format!("{watchable} input devices readable for release detection")
+            } else {
+                "no readable /dev/input device; add this user to the `input` group".into()
+            },
         });
 
         let window = freeflow_platform::context::active_window();

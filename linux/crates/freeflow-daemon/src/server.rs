@@ -85,7 +85,7 @@ async fn handle(daemon: Arc<Daemon>, stream: UnixStream) -> anyhow::Result<()> {
 
 async fn dispatch(daemon: &Arc<Daemon>, request: Request) -> Response {
     match request {
-        Request::Shortcut { event, key: _ } => match daemon.handle_shortcut(event).await {
+        Request::Shortcut { event, key } => match daemon.handle_shortcut(event, key).await {
             Ok(()) => Response::ok(daemon.state()),
             Err(e) => Response::error(DaemonState::Error, e.to_string()),
         },
