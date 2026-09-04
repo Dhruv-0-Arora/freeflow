@@ -51,6 +51,14 @@ enum Command {
     DefaultConfig,
     /// Print the Hyprland bindings to add to hyprland.conf.
     Binds,
+    /// Show recent dictations stored locally.
+    History {
+        #[arg(long, default_value = "20")]
+        limit: usize,
+        /// Delete every stored dictation.
+        #[arg(long)]
+        clear: bool,
+    },
     /// Run the pipeline against a WAV file and report per-stage latency.
     Bench {
         wav: String,
@@ -180,6 +188,13 @@ async fn main() -> anyhow::Result<()> {
         Command::CopyAgain => Request::CopyAgain,
         Command::Cancel => Request::Cancel,
         Command::Status => Request::Status,
+        Command::History { limit, clear } => {
+            if clear {
+                Request::ClearHistory
+            } else {
+                Request::History { limit }
+            }
+        }
         Command::Bench { wav, inject } => Request::Bench {
             wav_path: std::fs::canonicalize(&wav)
                 .with_context(|| format!("{wav}: not found"))?
@@ -194,6 +209,7 @@ async fn main() -> anyhow::Result<()> {
     let is_doctor = matches!(request, Request::Doctor);
     let is_status = matches!(request, Request::Status);
     let is_bench = matches!(request, Request::Bench { .. });
+    let is_history = matches!(request, Request::History { .. });
     let response = send(request).await?;
 
     if is_doctor {
@@ -214,6 +230,26 @@ async fn main() -> anyhow::Result<()> {
 
     if is_status {
         print_status(&response);
+        return Ok(());
+    }
+
+    if is_history {
+        if response.history.is_empty() {
+            println!("no history (is dictation.history_enabled set?)");
+        }
+        for row in &response.history {
+            println!(
+                "{}  {:>5}ms+{:>5}ms  {:<12} {}",
+                row.created_at,
+                row.transcription_ms,
+                row.cleanup_ms,
+                row.app_class.as_deref().unwrap_or("-"),
+                row.final_text
+            );
+            if row.raw_transcript != row.final_text {
+                println!("{:>34}raw: {}", "", row.raw_transcript);
+            }
+        }
         return Ok(());
     }
 

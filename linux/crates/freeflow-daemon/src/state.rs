@@ -15,6 +15,7 @@ use freeflow_llm::{CliHarnessBackend, LlmBackend, OpenAiCompatBackend, RoutingBa
 use freeflow_platform::{audio, inject};
 use tokio::sync::Mutex;
 
+use crate::history::{History, NewEntry};
 use crate::pipeline::{self, SessionContext};
 
 /// Live recording plus the context captured when it started.
@@ -34,6 +35,10 @@ pub struct Daemon {
     /// The last injected text, so `copy-again` can re-deliver a result that
     /// landed in the wrong window.
     last_result: Mutex<Option<String>>,
+    /// `None` when `dictation.history_enabled` is off, or when the store could
+    /// not be opened. Either way dictation continues: history is a
+    /// convenience, and failing a dictation over it would be the wrong trade.
+    history: Mutex<Option<History>>,
 }
 
 /// Builds the backend chain from configuration.
@@ -98,11 +103,28 @@ impl Daemon {
                 .with_language(transcription.language.clone())
                 .with_timeout(Duration::from_secs(transcription.timeout_seconds.max(5)));
 
+        // History is a convenience. If the store cannot be opened, dictation
+        // must still work, so this degrades to no history rather than failing
+        // to start.
+        let history = config
+            .dictation
+            .history_enabled
+            .then(|| {
+                let path = paths::history_database().ok()?;
+                History::open(&path)
+                    .inspect_err(|e| {
+                        tracing::warn!(error = %e, "history is disabled for this session");
+                    })
+                    .ok()
+            })
+            .flatten();
+
         Ok(Self {
             llm: build_llm(&config)?,
             asr,
             macros: Vec::new(),
             config,
+            history: Mutex::new(history),
             session: Mutex::new(DictationShortcutSessionController::new()),
             active: Mutex::new(None),
             state: Mutex::new(DaemonState::Idle),
@@ -223,6 +245,7 @@ impl Daemon {
                         "dictation complete"
                     );
                     if !result.text.is_empty() {
+                        daemon.record_history(&result).await;
                         *daemon.last_result.lock().await = Some(result.text);
                     }
                     daemon.set_state(DaemonState::Idle).await;
@@ -233,6 +256,57 @@ impl Daemon {
                 }
             }
         });
+        Ok(())
+    }
+
+    /// Writes one completed dictation to the local history store.
+    async fn record_history(&self, result: &pipeline::PipelineResult) {
+        let guard = self.history.lock().await;
+        let Some(store) = guard.as_ref() else { return };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if let Err(e) = store.record(&NewEntry {
+            raw_transcript: &result.raw_transcript,
+            final_text: &result.text,
+            outcome: &result.outcome,
+            app_class: result.app_class.as_deref(),
+            transcription_ms: result.timings.transcription.as_millis() as u64,
+            cleanup_ms: result.timings.cleanup.as_millis() as u64,
+            now,
+        }) {
+            tracing::warn!(error = %e, "could not write history");
+        }
+    }
+
+    /// Recent dictations, newest first.
+    pub async fn history(&self, limit: usize) -> Vec<freeflow_core::proto::HistoryRow> {
+        let guard = self.history.lock().await;
+        let Some(store) = guard.as_ref() else {
+            return Vec::new();
+        };
+        store
+            .recent(limit)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| freeflow_core::proto::HistoryRow {
+                created_at: e.created_at,
+                raw_transcript: e.raw_transcript,
+                final_text: e.final_text,
+                outcome: e.outcome,
+                app_class: e.app_class,
+                transcription_ms: e.transcription_ms,
+                cleanup_ms: e.cleanup_ms,
+            })
+            .collect()
+    }
+
+    pub async fn clear_history(&self) -> anyhow::Result<()> {
+        let guard = self.history.lock().await;
+        if let Some(store) = guard.as_ref() {
+            store.clear()?;
+        }
         Ok(())
     }
 
@@ -271,6 +345,12 @@ impl Daemon {
             |_| {},
         )
         .await?;
+        // A dry run is a measurement, not a dictation, so it stays out of
+        // history. `--inject` types into a real window, which is a dictation
+        // by any reasonable definition, so it is recorded like one.
+        if inject && !result.text.is_empty() {
+            self.record_history(&result).await;
+        }
         Ok((result.text, result.timings))
     }
 

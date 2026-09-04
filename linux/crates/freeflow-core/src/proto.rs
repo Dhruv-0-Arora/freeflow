@@ -40,7 +40,29 @@ pub enum Request {
         #[serde(default)]
         inject: bool,
     },
+    /// Read recent dictations.
+    History {
+        limit: usize,
+    },
+    /// Delete all stored dictations.
+    ClearHistory,
     Shutdown,
+}
+
+/// One history row, as sent over the control socket.
+///
+/// This carries transcript text, unlike [`Response::message`]. That is
+/// acceptable only because the socket lives in `$XDG_RUNTIME_DIR`, which is
+/// `0700`, and because sending it is what the user explicitly asked for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryRow {
+    pub created_at: i64,
+    pub raw_transcript: String,
+    pub final_text: String,
+    pub outcome: String,
+    pub app_class: Option<String>,
+    pub transcription_ms: i64,
+    pub cleanup_ms: i64,
 }
 
 /// What the daemon is doing. Drives the overlay and `freeflow status`.
@@ -85,6 +107,8 @@ pub struct Response {
     pub timings: Option<StageTimings>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<DoctorCheck>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<HistoryRow>,
 }
 
 impl Response {
@@ -96,6 +120,7 @@ impl Response {
             level: None,
             timings: None,
             checks: Vec::new(),
+            history: Vec::new(),
         }
     }
 
@@ -107,6 +132,7 @@ impl Response {
             level: None,
             timings: None,
             checks: Vec::new(),
+            history: Vec::new(),
         }
     }
 

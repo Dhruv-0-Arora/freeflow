@@ -6,6 +6,7 @@
 //! daemon free of GUI and input dependencies is what lets the whole pipeline
 //! be exercised from a script.
 
+mod history;
 mod pipeline;
 mod server;
 mod state;

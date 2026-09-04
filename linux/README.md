@@ -127,6 +127,26 @@ The cleanup number depends heavily on the backend. Groq is roughly 500ms; a loca
 
 The harness is only viable because workers are **pre-warmed on key-down**: a cold `claude -p` invocation costs about 5.8s, of which only 0.07s is process startup — the rest is agent-session bootstrap. Starting that work when you press the key hides it behind the time you spend speaking. Workers are then used once and discarded, so no dictation's transcript is ever visible to the next one.
 
+## History
+
+Every completed dictation is stored locally in SQLite at
+`~/.local/state/freeflow/history.sqlite3`, created `0600` and capped at 500
+entries. Nothing is ever transmitted. Turn it off with
+`dictation.history_enabled = false`.
+
+```console
+$ freeflow history --limit 3
+1788555435    523ms+ 4014ms  foot    Let's meet Wednesday after lunch and ship the NixOS port.
+                                raw: Let's meet Wednesday after lunch and ship the Nick Sodes port.
+```
+
+The `raw:` line appears when cleanup changed the text, which is the only
+practical way to tell whether the prompt and custom vocabulary are earning
+their latency. Above, `custom_vocabulary = [ "NixOS" ]` is what turned
+"Nick Sodes" back into "NixOS".
+
+`freeflow history --clear` deletes everything.
+
 ## Troubleshooting
 
 Run `freeflow doctor` first. It checks the microphone, `wtype`, the compositor, the LLM backend, and the transcription endpoint.
@@ -158,6 +178,16 @@ cargo test -p freeflow-asr --test live_whisper -- --ignored   # a running whispe
 ```
 
 The first catches upstream protocol drift in the harness; the second proves the whisper route flags still work.
+
+And an end-to-end check that types into a real window:
+
+```bash
+scripts/e2e.sh speech.wav ./result/bin/freeflow
+```
+
+It uses a recorded WAV rather than the microphone so it is reproducible.
+Microphone capture is verified separately with `freeflow devices` and the
+overlay's level meter.
 
 ### Layout
 

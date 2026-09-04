@@ -67,7 +67,11 @@ pub struct Timings {
 
 pub struct PipelineResult {
     pub text: String,
+    /// Kept alongside the final text so history shows what cleanup changed,
+    /// which is the only way to tell a good prompt from a bad one.
+    pub raw_transcript: String,
     pub outcome: Outcome,
+    pub app_class: Option<String>,
     pub timings: Timings,
 }
 
@@ -172,7 +176,9 @@ pub async fn run(
     if text.trim().is_empty() {
         return Ok(PipelineResult {
             text,
+            raw_transcript,
             outcome,
+            app_class: session.window.class.clone(),
             timings,
         });
     }
@@ -182,7 +188,9 @@ pub async fn run(
     if !should_inject {
         return Ok(PipelineResult {
             text: parsed.transcript,
+            raw_transcript,
             outcome,
+            app_class: session.window.class.clone(),
             timings,
         });
     }
@@ -200,7 +208,9 @@ pub async fn run(
 
     Ok(PipelineResult {
         text: parsed.transcript,
+        raw_transcript,
         outcome,
+        app_class: session.window.class.clone(),
         timings,
     })
 }

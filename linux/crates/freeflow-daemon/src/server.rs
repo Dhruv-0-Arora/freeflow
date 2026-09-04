@@ -123,6 +123,15 @@ async fn dispatch(daemon: &Arc<Daemon>, request: Request) -> Response {
                 Err(e) => Response::error(daemon.state().await, e.to_string()),
             }
         }
+        Request::History { limit } => {
+            let mut response = Response::ok(daemon.state().await);
+            response.history = daemon.history(limit.clamp(1, 500)).await;
+            response
+        }
+        Request::ClearHistory => match daemon.clear_history().await {
+            Ok(()) => Response::ok(daemon.state().await).with_message("history cleared"),
+            Err(e) => Response::error(daemon.state().await, e.to_string()),
+        },
         Request::Shutdown => {
             daemon.shutdown().await;
             // The process exits after the reply is flushed, so the caller
