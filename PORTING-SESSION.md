@@ -157,15 +157,19 @@ If every backend fails, the raw transcript is typed anyway. Every branch of the 
 
 ## 6. Things that were wrong, and what caught them
 
-This is the most useful section to review. Seven assumptions failed; every one was caught by testing against the real thing rather than by reasoning.
+This is the most useful section to review. Nine assumptions failed; seven were caught by testing against the real thing before shipping, and two (6.8, 6.9) shipped and were caught by the user because the one step that would have exposed them ran after all testing ended.
 
-### 6.1 `bindr` would wedge recording forever — caught by review + live probe
+### 6.1 `bindr` would wedge recording forever — caught by review + live probe, but the fix was worse (see 6.8)
 
 Hyprland filters binds against the current modifier mask **on release as well as press**. With `bindr = SUPER_ALT, D`, releasing SUPER before D means the release never fires and recording continues until the watchdog trips.
 
 Fix: `bindri` (the `i` flag ignores modifiers). Verified on Hyprland 0.55.4 by probing — it rejects `bindz` as `bind: invalid flag` but accepts `i`, so acceptance is meaningful rather than silent tolerance.
 
 A flake check now asserts this, and **the check was itself verified by reverting the fix and confirming it fails.**
+
+**Postscript: this fix caused 6.8.**
+The probe validated that the flag was accepted and that the wedge case was cured.
+It never asked what the flag does to every *other* press of the key.
 
 ### 6.2 A harness emits nothing until it receives a turn — caught by a live run that hung
 
@@ -196,6 +200,36 @@ Added `strip_non_speech_annotations` with a **closed list** of known markers, pl
 ### 6.7 Env-var fault injection leaked between parallel tests
 
 `std::env::set_var` is process-global, so faults set by one test affected concurrently running ones. Faults now travel in argv, isolating each spawn.
+
+### 6.8 `bindri` made plain `t` and `d` untypable system-wide — shipped, caught by the user
+
+The worst bug of the port, and it was the *fix* from 6.1.
+Hyprland's `KeybindManager` consumes the **press** of any key that has a matching release bind (`if (pressed && k->release) { found = true; }` - the press is swallowed so the release can fire without the app having seen the key).
+The `i` flag makes that match ignore modifiers.
+So `bindri = SUPER_ALT, D` and `bindri = SUPER_ALT, T` silently consumed every unmodified press of `d` and `t` on the machine.
+The user discovered it by typing: their bug report itself was missing every `t` and `d`.
+
+Why nothing caught it:
+
+- All E2E testing ran **before** `nixos-rebuild switch`, the one step left to the user, so the binds were never live during verification.
+- The 6.1 probe validated the flag in the direction of the old bug only.
+- The flake check *asserted the buggy flag was present* - a check can enshrine a wrong assumption exactly as firmly as a right one.
+
+Fix: release binds are gone from the compositor entirely.
+Press binds pass their main key via `--key`, and the daemon watches `/dev/input` (the user is in the `input` group) for that key's release, polling key state only while a session is active.
+This also cures the original 6.1 wedge - evdev sees the release no matter which order the chord is released in - and the flake check is inverted: it now fails if any release bind is ever emitted.
+
+### 6.9 The overlay froze on "Pasting" after every edit-mode dictation — shipped, caught by the user
+
+Pipeline stage reports went through `tokio::spawn`, and the `Injecting` report is followed by purely synchronous code, so the spawned write could land *after* the terminal `Idle` write (tokio's LIFO slot ensures it in practice).
+The daemon then permanently reported "Pasting", which the overlay never hides, and which counts as busy - so subsequent hotkey presses were silently dropped too.
+Plain dictations often self-healed because a spoken "press enter" yields between the two writes; edit mode never does, which is why the user saw it after an edit-mode run.
+
+Fixes, each with a test that was verified to fail against the old code:
+
+- State lives in a `tokio::sync::watch` channel written synchronously; the terminal write is last by construction.
+- `Error` auto-clears to `Idle` after 4s, so a failed dictation no longer pins the overlay forever.
+- The busy state is set *before* the pipeline task is spawned, closing a re-entry race that let a second recording start while the first was processing (the likely source of the HTTP 400 seen in the same minute: a sub-200ms tap producing a header-only WAV, now also guarded).
 
 ### Also corrected
 
@@ -332,4 +366,16 @@ Things that repeatedly proved worth the time:
 - **Measuring before designing.** The 0.07s startup floor vs 5.8s one-shot gap is what produced the pool design. Reasoning alone would have produced a worse architecture.
 - **Testing claims rather than accepting them.** A design review supplied three findings; all three were checked against the machine. All three held, but two needed correction in detail — and one of the reviewer's own assumptions (readiness signal) turned out wrong.
 - **Verifying that tests can fail.** The `bindri` check was confirmed by reverting the fix. A check that cannot fail is worthless.
-- **Running the real thing early.** Five of the seven errors above were invisible to unit tests and only appeared against real hardware, a real compositor, or the real `claude` binary.
+- **Running the real thing early.** Five of the seven pre-ship errors above were invisible to unit tests and only appeared against real hardware, a real compositor, or the real `claude` binary.
+
+And, from 6.8 and 6.9, the lessons this session's method missed:
+
+- **"One step left to run by hand" means the integrated system ships untested.**
+  Everything after that step - the live binds, the real state machine under real dictations - ran for the first time on the user.
+  The E2E pass has to happen after the last enabling step, even when that step needs a password.
+- **A fix must be tested against what it can break, not only against what it cures.**
+  The `bindri` probe answered "does the wedge case work now?" and never "what else does this flag match?".
+- **A check asserts an assumption, not a truth.**
+  The flake check made the `bindri` regression *harder* to remove, because removing the bug failed CI.
+- **State transitions must be ordered by construction, not by scheduler luck.**
+  Reporting state via `tokio::spawn` worked in every test and failed in the one path no test covered.
