@@ -60,6 +60,16 @@ let
   };
 
   whisperExec = enabled.systemd.user.services.freeflow-whisper.Service.ExecStart;
+
+  # Built directly rather than read off the service, since the architecture
+  # pin lives in the package's cmakeFlags.
+  cudaWhisper =
+    (import ./whisper-server.nix {
+      inherit lib pkgs;
+      cudaSupport = true;
+      cudaCapabilities = [ "8.6" ];
+    }).package;
+  cudaArchFlags = lib.filter (f: lib.hasInfix "CUDA_ARCHITECTURES" f) cudaWhisper.cmakeFlags;
   binds = enabled.wayland.windowManager.hyprland.extraConfig;
 
   assertions = [
@@ -100,6 +110,14 @@ let
         "copy-again"
         "cancel"
       ];
+    }
+    {
+      # `cmakeCudaArchitecturesString` is derived from cudaCapabilities rather
+      # than read from it, so setting only the latter silently compiles every
+      # architecture nixpkgs supports - nine of them - turning a short build
+      # into a very long one.
+      name = "the CUDA architecture pin actually reaches cmake";
+      ok = cudaArchFlags == [ "-DCMAKE_CUDA_ARCHITECTURES:STRING=86" ];
     }
     {
       name = "whisper can be disabled independently of the daemon";

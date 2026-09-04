@@ -18,6 +18,16 @@
   cudaCapabilities ? [ "8.6" ],
 }:
 let
+  # whisper-cpp reads `cudaPackages.flags.cmakeCudaArchitecturesString` for
+  # CMAKE_CUDA_ARCHITECTURES, and that string is *derived* from
+  # cudaCapabilities rather than read from it at build time. Overriding only
+  # cudaCapabilities therefore silently does nothing, and the build compiles
+  # every architecture nixpkgs supports - nine of them - instead of the one
+  # this machine has. Both have to be set.
+  cudaArchitecturesString = lib.concatStringsSep ";" (
+    map (c: lib.replaceStrings [ "." ] [ "" ] c) cudaCapabilities
+  );
+
   whisper =
     if cudaSupport then
       (pkgs.whisper-cpp.override {
@@ -25,6 +35,7 @@ let
         cudaPackages = pkgs.cudaPackages // {
           flags = pkgs.cudaPackages.flags // {
             inherit cudaCapabilities;
+            cmakeCudaArchitecturesString = cudaArchitecturesString;
           };
         };
       })
