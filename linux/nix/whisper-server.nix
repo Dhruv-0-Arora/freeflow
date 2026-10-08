@@ -13,23 +13,25 @@
   lib,
   pkgs,
   cudaSupport ? false,
-  # Pinning the architecture cuts build time substantially and guarantees the
-  # GPU is actually targeted. 8.6 is Ampere, which covers the RTX 3070.
-  cudaCapabilities ? [ "8.6" ],
+  # Pinning the architecture cuts build time substantially. null keeps the
+  # nixpkgs default, which builds for every supported architecture.
+  cudaCapabilities ? null,
 }:
 let
   # whisper-cpp reads `cudaPackages.flags.cmakeCudaArchitecturesString` for
   # CMAKE_CUDA_ARCHITECTURES, and that string is *derived* from
   # cudaCapabilities rather than read from it at build time. Overriding only
   # cudaCapabilities therefore silently does nothing, and the build compiles
-  # every architecture nixpkgs supports - nine of them - instead of the one
-  # this machine has. Both have to be set.
+  # every architecture nixpkgs supports - nine of them - instead of the ones
+  # asked for. Both have to be set.
   cudaArchitecturesString = lib.concatStringsSep ";" (
     map (c: lib.replaceStrings [ "." ] [ "" ] c) cudaCapabilities
   );
 
   whisper =
-    if cudaSupport then
+    if cudaSupport && cudaCapabilities == null then
+      pkgs.whisper-cpp.override { cudaSupport = true; }
+    else if cudaSupport then
       (pkgs.whisper-cpp.override {
         cudaSupport = true;
         cudaPackages = pkgs.cudaPackages // {

@@ -54,6 +54,10 @@ let
     wayland.windowManager.hyprland.enable = true;
   };
   disabled = evalWith { services.freeflow.enable = false; };
+  customPort = evalWith {
+    services.freeflow.enable = true;
+    services.freeflow.whisper.port = 9090;
+  };
   noWhisper = evalWith {
     services.freeflow.enable = true;
     services.freeflow.whisper.enable = false;
@@ -78,11 +82,12 @@ let
   assertions = [
     {
       name = "all three user services are defined";
-      ok = builtins.attrNames enabled.systemd.user.services == [
-        "freeflow"
-        "freeflow-overlay"
-        "freeflow-whisper"
-      ];
+      ok =
+        builtins.attrNames enabled.systemd.user.services == [
+          "freeflow"
+          "freeflow-overlay"
+          "freeflow-whisper"
+        ];
     }
     {
       name = "whisper-server is given the OpenAI-compatible route flags";
@@ -138,11 +143,25 @@ let
       ok = cudaArchFlags == [ "-DCMAKE_CUDA_ARCHITECTURES:STRING=86" ];
     }
     {
+      name = "transcription follows a non-default whisper port";
+      # Read off the generator's input rather than its output, so the check
+      # needs no build during evaluation.
+      ok =
+        customPort.xdg.configFile."freeflow/config.toml".source.value.transcription.base_url
+        == "http://127.0.0.1:9090/v1/audio";
+    }
+    {
+      # The first start downloads a ~1.6 GB model inside ExecStartPre.
+      name = "the model download is not cut off by the start timeout";
+      ok = enabled.systemd.user.services.freeflow-whisper.Service.TimeoutStartSec == "infinity";
+    }
+    {
       name = "whisper can be disabled independently of the daemon";
-      ok = builtins.attrNames noWhisper.systemd.user.services == [
-        "freeflow"
-        "freeflow-overlay"
-      ];
+      ok =
+        builtins.attrNames noWhisper.systemd.user.services == [
+          "freeflow"
+          "freeflow-overlay"
+        ];
     }
     {
       name = "nothing is configured when the module is disabled";

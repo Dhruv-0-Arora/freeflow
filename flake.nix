@@ -9,19 +9,23 @@
       # The Swift app in Sources/ is macOS-only and is built by the Makefile.
       # This flake covers the Rust reimplementation under linux/ and therefore
       # deliberately exposes Linux outputs only.
-      system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+      forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
       # Runtime programs the daemon shells out to. Kept in one place so the
       # package wrapper and the devShell cannot drift apart.
-      runtimeDeps = with pkgs; [
-        wtype
-        wl-clipboard
-      ];
+      runtimeDeps =
+        pkgs: with pkgs; [
+          wtype
+          wl-clipboard
+        ];
     in
     {
-      packages.${system} = {
-        default = self.packages.${system}.freeflow;
+      packages = forAllSystems (pkgs: {
+        default = self.packages.${pkgs.stdenv.hostPlatform.system}.freeflow;
 
         freeflow = pkgs.rustPlatform.buildRustPackage {
           pname = "freeflow";
@@ -57,7 +61,7 @@
           # wrapGAppsHook4 wraps the binaries itself, so contribute the
           # runtime PATH through its hook rather than wrapping twice.
           preFixup = ''
-            gappsWrapperArgs+=(--prefix PATH : ${pkgs.lib.makeBinPath runtimeDeps})
+            gappsWrapperArgs+=(--prefix PATH : ${pkgs.lib.makeBinPath (runtimeDeps pkgs)})
           '';
 
           meta = {
@@ -66,35 +70,37 @@
             platforms = pkgs.lib.platforms.linux;
           };
         };
-      };
+      });
 
-      devShells.${system}.default = pkgs.mkShell {
-        packages =
-          with pkgs;
-          [
-            cargo
-            rustc
-            rustfmt
-            clippy
-            rust-analyzer
-            pkg-config
-            alsa-lib
-            gtk4
-            gtk4-layer-shell
-          ]
-          ++ runtimeDeps;
+      devShells = forAllSystems (pkgs: {
+        default = pkgs.mkShell {
+          packages =
+            with pkgs;
+            [
+              cargo
+              rustc
+              rustfmt
+              clippy
+              rust-analyzer
+              pkg-config
+              alsa-lib
+              gtk4
+              gtk4-layer-shell
+            ]
+            ++ runtimeDeps pkgs;
 
-        # cargo runs from the workspace root, not the repo root.
-        shellHook = ''
-          echo "freeflow linux dev shell - cd linux && cargo check"
-        '';
-      };
+          # cargo runs from the workspace root, not the repo root.
+          shellHook = ''
+            echo "freeflow linux dev shell - cd linux && cargo check"
+          '';
+        };
+      });
 
-      checks.${system} = {
+      checks = forAllSystems (pkgs: {
         # Catches a broken Home Manager module here rather than during a
         # rebuild on someone's machine.
         home-manager-module = import ./linux/nix/module-test.nix { inherit pkgs self; };
-      };
+      });
 
       # Import into a Home Manager configuration to get the daemon, the local
       # whisper-server, and the Hyprland bindings wired up together.
@@ -103,6 +109,6 @@
         freeflow = self.homeManagerModules.default;
       };
 
-      formatter.${system} = pkgs.nixfmt-rfc-style;
+      formatter = forAllSystems (pkgs: pkgs.nixfmt);
     };
 }

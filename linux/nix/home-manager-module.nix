@@ -31,6 +31,16 @@ let
     inherit (cfg.whisper) cudaSupport cudaCapabilities;
   };
 
+  # Point transcription at the local server unless the user chose a URL, so
+  # changing `whisper.port` cannot leave the daemon talking to the old one.
+  settings =
+    if cfg.whisper.enable then
+      lib.recursiveUpdate {
+        transcription.base_url = "http://127.0.0.1:${toString cfg.whisper.port}/v1/audio";
+      } cfg.settings
+    else
+      cfg.settings;
+
   modelPath = "${config.xdg.dataHome}/freeflow/models/ggml-${cfg.whisper.model}.bin";
 
   # The main key of a bind string: "SUPER_ALT, D" -> "D". Passed back to the
@@ -162,9 +172,14 @@ in
         '';
       };
       cudaCapabilities = mkOption {
-        type = types.listOf types.str;
-        default = [ "8.6" ];
-        description = "Target GPU architectures. 8.6 is Ampere (RTX 30-series).";
+        type = types.nullOr (types.listOf types.str);
+        default = null;
+        example = [ "8.6" ];
+        description = ''
+          GPU architectures to build for, e.g. [ "8.6" ] for an RTX 30-series.
+          Setting this shortens the CUDA build a lot. null builds for every
+          architecture nixpkgs supports.
+        '';
       };
       extraArgs = mkOption {
         type = types.listOf types.str;
@@ -176,8 +191,8 @@ in
   config = mkIf cfg.enable {
     home.packages = [ cfg.package ] ++ lib.optional cfg.whisper.enable whisper.fetchModelScript;
 
-    xdg.configFile."freeflow/config.toml" = mkIf (cfg.settings != { }) {
-      source = (pkgs.formats.toml { }).generate "freeflow-config.toml" cfg.settings;
+    xdg.configFile."freeflow/config.toml" = mkIf (settings != { }) {
+      source = (pkgs.formats.toml { }).generate "freeflow-config.toml" settings;
     };
 
     systemd.user.services.freeflow = {
@@ -215,8 +230,12 @@ in
       Unit = {
         Description = "whisper.cpp transcription server for FreeFlow";
         PartOf = [ "graphical-session.target" ];
+        After = [ "graphical-session.target" ];
       };
       Service = {
+        # The first start downloads the model (about 1.6 GB for the default),
+        # which can take far longer than systemd's 90 second start timeout.
+        TimeoutStartSec = "infinity";
         # Fetch the model before the first start; a no-op once present.
         ExecStartPre = "${whisper.fetchModelScript}/bin/freeflow-fetch-whisper-model ${cfg.whisper.model}";
         ExecStart = lib.escapeShellArgs (

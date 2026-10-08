@@ -21,7 +21,8 @@ cargo test --workspace
 # The Home Manager module can only break during someone's rebuild otherwise.
 if command -v nix >/dev/null 2>&1 && [ -z "${FREEFLOW_SKIP_NIX:-}" ]; then
   echo "==> nix flake check (home-manager module)"
-  nix build "$(dirname "$PWD")#checks.x86_64-linux.home-manager-module" --no-link
+  system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+  nix build "$(dirname "$PWD")#checks.${system}.home-manager-module" --no-link
 fi
 
 echo "OK"
