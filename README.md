@@ -13,6 +13,10 @@
   <sub>Works on all Macs (Apple Silicon + Intel)</sub>
 </p>
 
+> [!NOTE]
+> This fork adds a Linux version for Wayland and Nix. See [linux/README.md](linux/README.md).
+> The Mac app is unchanged from [upstream](https://github.com/zachlatta/freeflow).
+
 ---
 
 <p align="center">
